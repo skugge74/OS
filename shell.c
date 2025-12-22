@@ -41,14 +41,29 @@ void execute_command(char* input) {
     }
 
     if (kstrcmp(input, "HELP") == 0) {
-        kprintf("Commands: HELP, CLEAR, STATUS, ECHO, CRASH\n");
-    } else if (kstrcmp(input, "ECHO") == 0) {
+        kprintf("Commands: HELP, ECHO, RUN <filename>,  REBOOT, CRASH\n");
+    }
+else if (kstrcmp(input, "ECHO") == 0) {
       if (arg) kprintf("%s\n", arg);
       else kprintf("Usage: ECHO <text>\n");
     }
-    else if (kstrcmp(input, "STAT") == 0) {
+
+else if (kstrcmp(input, "STAT") == 0) {
       kheap_stats();  
   }
+
+else if (kstrcmp(input, "SLEEP") == 0) {
+    if (arg) {
+        int ms = katoi(arg); // Convert "1000" string to integer
+        if (ms > 0) {
+            kprintf("Shell sleeping for %d ms...\n", ms);
+            sleep(ms); // This calls your new Syscall 3
+            kprintf("Shell awake.\n");
+        }
+    } else {
+        kprintf("Usage: SLEEP [ms]\n");
+    }
+}
 
 else if (kstrcmp(input, "RUN") == 0) {
     if (arg) {
@@ -201,7 +216,8 @@ else if (kstrcmp(input, "PS") == 0) {
                 kprintf(" ");
             }
             
-            kprintf(" READY\n");
+            if (task_get_state(i) == 1)      kprintf(" READY\n");
+            else if (task_get_state(i) == 2) kprintf(" SLEEP (%dms)\n", task_get_sleep_ticks(i));
         }
     }
 }
@@ -215,7 +231,13 @@ else if (kstrcmp(input, "PS") == 0) {
             
             if (id == 0) {
                 kprintf("Error: Cannot kill the Shell!\n");
-            } else {
+            }
+            else if (kstrcmp(task_get_name(id), "idle") == 0) {
+              kprintf("Error: Cannot kill the system idle process.\n");
+              return;
+            }
+
+      else {
                 kill_task(id);
                 kprintf("Task %d terminated.\n", id);
             }

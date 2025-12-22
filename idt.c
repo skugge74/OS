@@ -158,23 +158,33 @@ uint32_t next_stack_ptr = 0;
 void timer_handler(struct registers *regs) {
     system_ticks++;
 
-    // 1. Save the current task's ESP
+    // 1. Update sleeping tasks
+    for (int i = 0; i < MAX_TASKS; i++) {
+        if (task_list[i].state == 2) { 
+            if (task_list[i].sleep_ticks > 0) {
+                task_list[i].sleep_ticks--;
+            } 
+            // Check again after decrementing
+            if (task_list[i].sleep_ticks == 0) {
+                task_list[i].state = 1; 
+            }
+        }
+    }
+
+    // 2. Save current task ESP
     task_list[current_task_idx].esp = (uint32_t)regs;
 
-    // 2. Pick the next task
+    // 3. Find NEXT task that is READY (state 1)
     int next_task = (current_task_idx + 1) % MAX_TASKS;
-    int checks = 0;
-    while (task_list[next_task].state != 1 && checks < MAX_TASKS) {
+    int check_count = 0;
+    while (task_list[next_task].state != 1 && check_count < MAX_TASKS) {
         next_task = (next_task + 1) % MAX_TASKS;
-        checks++;
+        check_count++;
     }
 
     current_task_idx = next_task;
-
-    // 3. Set the global for the Assembly stub to pick up
     next_stack_ptr = task_list[current_task_idx].esp;
 
-    // 4. EOI
     outb(0x20, 0x20);
 }
 
@@ -227,4 +237,34 @@ void syscall_handler(struct registers *regs) {
     else if (regs->eax == 2) { // Get Ticks
         regs->eax = system_ticks; 
     }
+  else if (regs->eax == 3) { // Syscall 3: Sleep
+    uint32_t ms = regs->ebx;
+    
+    task_list[current_task_idx].sleep_ticks = ms; 
+    task_list[current_task_idx].state = 2; // SLEEPING
+    task_list[current_task_idx].esp = (uint32_t)regs;
+
+    // 1. Find the next READY task
+    int next_task = (current_task_idx + 1) % MAX_TASKS;
+    int found = -1;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        int idx = (next_task + i) % MAX_TASKS;
+        if (task_list[idx].state == 1) { // Found a READY task
+            found = idx;
+            break;
+        }
+    }
+
+    // 2. SAFETY: If NO other task is ready, we cannot sleep!
+    // We must stay in the Shell or the system will halt/crash.
+    if (found == -1 || found == current_task_idx) {
+        task_list[current_task_idx].state = 1; // Force back to READY
+        next_stack_ptr = 0; // Tell Assembly NOT to switch stacks
+        return; 
+    }
+
+    // 3. Perform the switch
+    current_task_idx = found;
+    next_stack_ptr = task_list[found].esp;
+}
 }

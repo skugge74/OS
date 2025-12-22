@@ -1,3 +1,10 @@
+; --- External Symbols ---
+extern timer_handler
+extern keyboard_handler
+extern syscall_handler
+extern isr_handler
+extern next_stack_ptr    ; Defined in idt.c or task.c
+
 ; --- Macros for Processor Exceptions ---
 %macro ISR_NOERRCODE 1
   global isr%1
@@ -48,71 +55,63 @@ ISR_NOERRCODE 29
 ISR_ERRCODE   30
 ISR_NOERRCODE 31
 
-[extern isr_handler]
-
-; This stub is used by all CPU exceptions
+; --- Exception Stub ---
 isr_common_stub:
-    pusha               ; Pushes edi, esi, ebp, esp, ebx, edx, ecx, eax
+    pusha               
     mov ax, ds
-    push eax            ; Save the current data segment
+    push eax            
 
-    mov ax, 0x10        ; Load the Kernel Data Segment (0x10)
+    mov ax, 0x10        
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
 
-    push esp            ; Pass pointer to the stack (registers_t)
+    push esp            
     call isr_handler
     
     add esp, 4
-    pop eax             ; Restore data segment
+    pop eax             
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
     popa
-    add esp, 8          ; Clean up error code and isr number
+    add esp, 8          
     iret
 
 ; --- Hardware IRQ Handlers ---
-; At the top of your file with other externs
-extern timer_handler
-extern keyboard_handler
-extern next_stack_ptr    ; We assume this is defined in idt.c or task.c
 
 global irq0_handler
 irq0_handler:
-    push byte 0         ; Dummy error code
-    push byte 32        ; Interrupt number
-    pusha               ; Save EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX
-    
-    mov ax, ds          ; Save current Data Segment
+    push byte 0         
+    push byte 32        
+    pusha               
+    mov ax, ds
     push eax            
 
-    mov ax, 0x10        ; Load Kernel Data Segment
+    mov ax, 0x10        
     mov ds, ax
     mov es, ax
 
-    push esp            ; Pass the current stack frame to the C handler
+    push esp            
     call timer_handler
-    add esp, 4          ; Clean up the pushed ESP
+    add esp, 4          
 
-    ; --- THE TASK SWITCH LOGIC ---
-    ; After timer_handler, next_stack_ptr contains the ESP of the next task
+    ; --- TASK SWITCH LOGIC (Timer) ---
     mov eax, [next_stack_ptr]
-    test eax, eax       ; Faster check for NULL
+    test eax, eax       
     jz .no_switch
-    mov esp, eax        ; ACTUAL SWITCH: Change the CPU stack pointer
+    mov esp, eax        
+    mov dword [next_stack_ptr], 0 ; Clear the pointer after switch
 .no_switch:
 
-    pop eax             ; Restore Data Segment
+    pop eax             
     mov ds, ax
     mov es, ax
-    
-    popa                ; Restore registers for the NEW task
-    add esp, 8          ; Clean up error code and int_no
-    iret                ; Exit interrupt and jump to the new task's EIP
+    popa
+    add esp, 8          
+    iret
 
 global irq1_handler
 irq1_handler:
@@ -136,48 +135,45 @@ irq1_handler:
     popa
     add esp, 8          
     iret
+
 ; --- System Call Handler (int 0x80) ---
 
-[extern syscall_handler]
 global isr128_stub
 isr128_stub:
-    push byte 0         ; Dummy error code
-    push dword 128      ; Interrupt number
-    pusha               ; Save all registers (EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX)
+    push byte 0         
+    push dword 128      
+    pusha               
     
     mov ax, ds
-    push eax            ; Save data segment
+    push eax            
 
-    mov ax, 0x10        ; Kernel Data Segment
+    mov ax, 0x10        
     mov ds, ax
     mov es, ax
 
-    push esp            ; Pass the registers to C
+    push esp            
     call syscall_handler
     
-    ; After the C call, the new EAX value is in the physical EAX register.
-    ; We must overwrite the EAX value on the stack so popa picks it up.
-    ; Stack layout right now:
-    ; [esp + 0]  = Saved DS
-    ; [esp + 4]  = EDI
-    ; [esp + 8]  = ESI
-    ; [esp + 12] = EBP
-    ; [esp + 16] = ESP (original)
-    ; [esp + 20] = EBX
-    ; [esp + 24] = EDX
-    ; [esp + 28] = ECX
-    ; [esp + 32] = EAX <--- This is the one we want to overwrite!
-    
+    ; Save return value from EAX into the stack frame for popa
     mov [esp + 32], eax 
 
-    add esp, 4          ; Clean up pointer
+    add esp, 4          
     
-    pop eax             ; Restore data segment
+    ; --- TASK SWITCH LOGIC (Syscall/Sleep) ---
+    ; This fixes the GPF 13 by swapping stacks here instead of inside C
+    mov eax, [next_stack_ptr]
+    test eax, eax
+    jz .no_switch_syscall
+    mov esp, eax        ; Load the stack of the NEXT task
+    mov dword [next_stack_ptr], 0 ; Clear pointer
+.no_switch_syscall:
+
+    pop eax             
     mov ds, ax
     mov es, ax
 
-    popa                ; This loads the MODIFIED EAX from the stack!
-    add esp, 8          ; Clean up error code and int number
+    popa                
+    add esp, 8          
     iret
 
 ; --- Utility Functions ---
@@ -194,13 +190,10 @@ switch_to_stack:
     push edi
     push esi
     push ebx
-
-    mov eax, [esp + 20] ; old_esp pointer
-    mov ecx, [esp + 24] ; new_esp value
-    
-    mov [eax], esp      ; save old esp
-    mov esp, ecx        ; load new esp
-
+    mov eax, [esp + 20] 
+    mov ecx, [esp + 24] 
+    mov [eax], esp      
+    mov esp, ecx        
     pop ebx
     pop esi
     pop edi

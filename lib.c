@@ -11,6 +11,15 @@ int kstrcmp(const char* a, const char* b) {
     return *(unsigned char*)a - *(unsigned char*)b;
 }
 
+int katoi(char* str) {
+    int res = 0;
+    for (int i = 0; str[i] != '\0'; ++i) {
+        if (str[i] < '0' || str[i] > '9') break;
+        res = res * 10 + str[i] - '0';
+    }
+    return res;
+}
+
 char* kstrcpy(char* dest, const char* src) {
     char* saved = dest;
     while ((*dest++ = *src++) != '\0');
@@ -173,13 +182,6 @@ void itoa(int n, char* str, int base) {
 }
 extern uint32_t system_ticks;
 
-void sleep(int ms) {
-    uint32_t start_ticks = system_ticks;
-    while (system_ticks < start_ticks + ms) {
-        // We use 'hlt' to save CPU power while waiting
-        __asm__ volatile("hlt");
-    }
-}
 void hexdump(void* ptr, int size) {
     unsigned char* data = (unsigned char*)ptr;
     
@@ -210,4 +212,12 @@ void hexdump(void* ptr, int size) {
     if (size % 8 != 0) {
         kprintf("\n");
     }
+}
+void sleep(int ms) {
+    __asm__ volatile (
+        "mov $3, %%eax \n" // Syscall number 3
+        "mov %0, %%ebx \n" // Number of ms
+        "int $0x80     \n"
+        : : "r"(ms) : "eax", "ebx"
+    );
 }

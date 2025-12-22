@@ -138,20 +138,24 @@ void kill_task(int id) {
     task_list[id].last_x = 0;
     task_list[id].last_y = 0;
 }
-void init_multitasking() {
-    // 1. Clear ALL slots first to be safe
-    for (int i = 0; i < MAX_TASKS; i++) {
-        task_list[i].state = 0;
-        task_list[i].esp = 0;
+void idle_task_code() {
+    while(1) {
+        __asm__ volatile("hlt");
     }
-
-    // 2. Define Task 0 as the Shell (current execution)
-    kstrcpy(task_list[0].name, "shell");
-    task_list[0].state = 1; 
-    current_task_idx = 0;
-
 }
+void init_multitasking() {
+    for (int i = 0; i < MAX_TASKS; i++) task_list[i].state = 0;
 
+    // Task 0: Shell
+    task_list[0].state = 1;
+    kstrncpy(task_list[0].name, "shell", 15);
+    
+    // Task 9: Idle Task (Always READY)
+    // Use your existing spawn_task logic or manually set it up
+    spawn_task(idle_task_code, NULL, "idle");
+    
+    current_task_idx = 0;
+}
 // Helper function
 int get_current_task_id() {
     return current_task_idx;
@@ -170,4 +174,13 @@ uint32_t task_get_esp(int id) {
 char* task_get_name(int id) {
     if (id < 0 || id >= MAX_TASKS) return "unused";
     return task_list[id].name;
+}
+
+int task_get_state(int id){
+    if (id < 0 || id >= MAX_TASKS) return -1;
+    return task_list[id].state;
+}
+int task_get_sleep_ticks(int id){
+  if (id < 0 || id >= MAX_TASKS) return -1;
+  return task_list[id].sleep_ticks;
 }

@@ -7,7 +7,8 @@
 
 struct task {
     uint32_t esp;
-    uint32_t state; // 0 = empty, 1 = ready
+    uint32_t state; // 0 = empty, 1 = ready, 2 = sleep 
+    uint32_t sleep_ticks;
     char name[16];
     uint32_t vga_index; // Store the character position (0-3999)
     int last_x; // Track the X coordinate used in syscall
@@ -18,6 +19,7 @@ struct task {
 };
 
 void init_multitasking();
+void idle_task_code();
 void yield();
 int get_current_task_id();
 int spawn_task(void (*entry_point)(), void* code_ptr, char* name);
@@ -26,4 +28,6 @@ uint32_t task_get_esp(int id);
 int task_is_ready(int id);
 void shell_task();
 char* task_get_name(int id);
+int task_get_state(int id);
+int task_get_sleep_ticks(int id);
 #endif

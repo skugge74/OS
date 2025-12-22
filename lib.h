@@ -3,10 +3,11 @@
 void itoa(int n, char* str, int base);
 void kprintf(const char* format, ...);
 void kprintf_color(int color, const char* format, ...);
-void sleep(int ms);
 int kstrcmp(const char* a, const char* b); 
 int kstrncmp(const char* s1, const char* s2, size_t n);
 char* kstrncpy(char* dest, const char* src, size_t n);
 size_t kstrlen(const char* str);
 char* kstrcpy(char* dest, const char* src);
 void hexdump(void* ptr, int size); 
+void sleep(int ms); 
+int katoi(char* str);
