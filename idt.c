@@ -4,6 +4,7 @@
 #include "lib.h"
 #include "task.h"
 
+uint32_t timer_frequency = 0; // Global variable to store the frequency
 extern struct task task_list[];
 extern int current_task_idx;
 extern void isr0(); // Declaration of the assembly label
@@ -136,18 +137,18 @@ void idt_init() {
 
 
 
+
 void timer_init(uint32_t frequency) {
+    timer_frequency = frequency; // Save it for the syscall handler!
+
     // The PIT has an internal clock of 1.193182 MHz
     uint32_t divisor = 1193182 / frequency;
 
-    // Send the command byte (0x36 sets square wave mode)
     outb(0x43, 0x36);
 
-    // Split divisor into upper and lower bytes
     uint8_t l = (uint8_t)(divisor & 0xFF);
     uint8_t h = (uint8_t)((divisor >> 8) & 0xFF);
 
-    // Send the frequency divisor
     outb(0x40, l);
     outb(0x40, h);
 }
@@ -237,14 +238,24 @@ void syscall_handler(struct registers *regs) {
     else if (regs->eax == 2) { // Get Ticks
         regs->eax = system_ticks; 
     }
-  else if (regs->eax == 3) { // Syscall 3: Sleep
+
+else if (regs->eax == 3) { // Syscall 3: Sleep(ms)
     uint32_t ms = regs->ebx;
     
-    task_list[current_task_idx].sleep_ticks = ms; 
-    task_list[current_task_idx].state = 2; // SLEEPING
+    // 1. Convert Milliseconds to Ticks based on current frequency
+    // Formula: Ticks = (ms * frequency) / 1000
+    uint32_t ticks_to_sleep = (ms * timer_frequency) / 1000;
+
+    // Safety: Ensure we sleep at least 1 tick if ms > 0
+    if (ms > 0 && ticks_to_sleep == 0) {
+        ticks_to_sleep = 1;
+    }
+
+    task_list[current_task_idx].sleep_ticks = ticks_to_sleep; 
+    task_list[current_task_idx].state = 2; // Set state to SLEEPING
     task_list[current_task_idx].esp = (uint32_t)regs;
 
-    // 1. Find the next READY task
+    // 2. Find the next READY task
     int next_task = (current_task_idx + 1) % MAX_TASKS;
     int found = -1;
     for (int i = 0; i < MAX_TASKS; i++) {
@@ -255,16 +266,17 @@ void syscall_handler(struct registers *regs) {
         }
     }
 
-    // 2. SAFETY: If NO other task is ready, we cannot sleep!
-    // We must stay in the Shell or the system will halt/crash.
+    // 3. SAFETY: If NO other task is ready (e.g., shell is alone and no idle task),
+    // we cannot put the current task to sleep or the CPU will have nothing to run.
     if (found == -1 || found == current_task_idx) {
-        task_list[current_task_idx].state = 1; // Force back to READY
-        next_stack_ptr = 0; // Tell Assembly NOT to switch stacks
+        task_list[current_task_idx].state = 1; // Keep it READY
+        next_stack_ptr = 0;                    // Don't switch stacks
         return; 
     }
 
-    // 3. Perform the switch
+    // 4. Perform the switch
     current_task_idx = found;
     next_stack_ptr = task_list[found].esp;
 }
+
 }
