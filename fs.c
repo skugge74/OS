@@ -162,3 +162,11 @@ char* fs_get_data(char* name) {
     }
     return 0;
 }
+uint32_t fs_get_size_by_name(char* name) {
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (files[i].active && kstrcmp(files[i].name, name) == 0) {
+            return files[i].size;
+        }
+    }
+    return 0;
+}

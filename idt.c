@@ -152,41 +152,30 @@ void timer_init(uint32_t frequency) {
     outb(0x40, h);
 }
 
+// Define this at the top of idt.c
+uint32_t next_stack_ptr = 0;
+
 void timer_handler(struct registers *regs) {
     system_ticks++;
-    outb(0x20, 0x20);
+
+    // 1. Save the current task's ESP
     task_list[current_task_idx].esp = (uint32_t)regs;
 
+    // 2. Pick the next task
     int next_task = (current_task_idx + 1) % MAX_TASKS;
-    
-    // Safety check: Count how many tasks we've checked to avoid infinite loops
-    int check_count = 0;
-    while (task_list[next_task].state != 1 && check_count < MAX_TASKS) {
+    int checks = 0;
+    while (task_list[next_task].state != 1 && checks < MAX_TASKS) {
         next_task = (next_task + 1) % MAX_TASKS;
-        check_count++;
+        checks++;
     }
 
-    // If no other task is READY, but the current one was just KILLED (state 0)
-    // we MUST force a switch to Task 0 (the Shell/Kernel)
-    if (task_list[current_task_idx].state == 0 && next_task == current_task_idx) {
-        next_task = 0; 
-    }
+    current_task_idx = next_task;
 
-    if (next_task != current_task_idx) {
-        current_task_idx = next_task;
-        uint32_t new_esp = task_list[next_task].esp;
+    // 3. Set the global for the Assembly stub to pick up
+    next_stack_ptr = task_list[current_task_idx].esp;
 
-        __asm__ volatile (
-            "mov %0, %%esp \n"
-            "pop %%eax     \n"
-            "mov %%ax, %%ds \n"
-            "mov %%ax, %%es \n"
-            "popa          \n" 
-            "add $8, %%esp \n"
-            "iret          \n" 
-            : : "r" (new_esp) : "memory"
-        );
-    }
+    // 4. EOI
+    outb(0x20, 0x20);
 }
 
 // Track shift state globally in idt.c or io.c
@@ -219,6 +208,7 @@ void keyboard_handler(struct registers *regs) {
     outb(0x20, 0x20);
 }
 void syscall_handler(struct registers *regs) {
+//VGA_print_at(".", 0x0F, 79, 0);
     if (regs->eax == 1) { // Print Char At
         char c = (char)regs->ebx;
         int x = regs->ecx;

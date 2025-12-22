@@ -44,33 +44,65 @@ void shell_task() {
         }
     }
 }
-void kill_task(int id) {
-    // 1. Validation: Don't kill the shell (0) or out-of-bounds IDs
-    if (id <= 0 || id >= MAX_TASKS) return;
 
-    // 2. Clear the spot on screen where the task last drew
-    // We use the coordinates saved by the syscall_handler
-    if (task_list[id].has_drawn) {
-        int x = task_list[id].last_x;
-        int y = task_list[id].last_y;
-        
-        // We call our existing VGA function to keep logic consistent
-        // 0x07 is the standard "light grey on black" attribute
-        VGA_print_at(" ", 0x07, x, y);
+int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
+    for (int i = 1; i < MAX_TASKS; i++) {
+        if (task_list[i].state == 0) {
+            // 1. Reset Metadata & Set Name
+            task_list[i].has_drawn = 0;
+            task_list[i].last_x = 0;
+            task_list[i].last_y = 0;
+            
+            // Copy name safely
+            kstrncpy(task_list[i].name, name, 15);
+            task_list[i].name[15] = '\0'; 
+
+            // 2. Allocate RAW memory (Store this for kfree)
+            // We allocate 8KB to ensure we can find a 4KB aligned block inside
+            void* raw_stack = kmalloc(4096 + 0x1000);
+            if (!raw_stack) return -1;
+
+            task_list[i].stack_ptr = raw_stack; 
+            task_list[i].code_ptr = code_ptr; 
+
+            // 3. Calculate the ALIGNED stack for the CPU
+            uint32_t aligned_stack = (uint32_t)raw_stack;
+            if (aligned_stack & 0xFFF) {
+                aligned_stack &= 0xFFFFF000;
+                aligned_stack += 0x1000;
+            }
+
+            // 4. Build the stack frame at the TOP of the aligned 4KB
+            uint32_t* s_ptr = (uint32_t*)(aligned_stack + 4096);
+
+            // --- THE IRET FRAME ---
+            *--s_ptr = 0x10;                     // SS
+            uint32_t task_stack_top = (uint32_t)s_ptr; 
+            *--s_ptr = task_stack_top;           // ESP
+            *--s_ptr = 0x202;                    // EFLAGS
+            *--s_ptr = 0x08;                     // CS
+            *--s_ptr = (uint32_t)entry_point;    // EIP
+
+            // --- INT DATA (Matches irq0_handler) ---
+            *--s_ptr = 0;                        // err_code
+            *--s_ptr = 32;                       // int_no (Timer)
+
+            // --- PUSHA FRAME ---
+            for(int j = 0; j < 8; j++) *--s_ptr = 0;
+
+            // --- DATA SEGMENT ---
+            *--s_ptr = 0x10;                     // DS
+
+            // 5. Save final ESP and set to READY
+            task_list[i].esp = (uint32_t)s_ptr;
+            task_list[i].state = 1; 
+            
+            return i;
+        }
     }
-
-    // 3. Mark as dead
-    // The scheduler will now bypass this task slot
-    task_list[id].state = 0;
-
-    // 4. Reset task metadata for the next time this slot is used
-    task_list[id].has_drawn = 0;
-    task_list[id].last_x = 0;
-    task_list[id].last_y = 0;
-
-    // Optional: Print a status message to the shell
-    // VGA_print("Task killed and spot cleared.\n", 0x0F);
+    return -1;
 }
+
 // Stacks for the tasks (10 stacks of 4KB each)
 uint32_t task_stacks[MAX_TASKS][1024];
 
@@ -79,53 +111,33 @@ void yield() {
     __asm__ volatile("int $0x20"); // Trigger the Timer Interrupt manually
 }
 
-int spawn_task(void (*entry_point)()) {
-    for (int i = 1; i < MAX_TASKS; i++) {
-        if (task_list[i].state == 0) {
-            // --- NEW: Reset drawing metadata ---
-            // This ensures kill_task doesn't wipe a random spot 
-            // from a previous process that lived in this slot.
-            task_list[i].has_drawn = 0;
-            task_list[i].last_x = 0;
-            task_list[i].last_y = 0;
+void kill_task(int id) {
+    if (id <= 0 || id >= MAX_TASKS) return;
 
-            // Allocate 4KB stack
-            uint32_t* stack = (uint32_t*)kmalloc_a(4096);
-            uint32_t* stack_ptr = stack + 1024; 
-
-            // --- STEP 1: THE IRET FRAME ---
-            *--stack_ptr = 0x10;                // SS
-            *--stack_ptr = (uint32_t)(stack + 1024); // ESP
-            *--stack_ptr = 0x202;               // EFLAGS (Interrupts Enabled)
-            *--stack_ptr = 0x08;                // CS
-            *--stack_ptr = (uint32_t)entry_point; // EIP
-
-            // --- STEP 2: THE STUB DATA ---
-            *--stack_ptr = 0;                   // err_code
-            *--stack_ptr = 0;                   // int_no
-
-            // --- STEP 3: THE PUSHA FRAME ---
-            *--stack_ptr = 0;                   // eax
-            *--stack_ptr = 0;                   // ecx
-            *--stack_ptr = 0;                   // edx
-            *--stack_ptr = 0;                   // ebx
-            *--stack_ptr = 0;                   // esp (ignored)
-            *--stack_ptr = 0;                   // ebp
-            *--stack_ptr = 0;                   // esi
-            *--stack_ptr = 0;                   // edi
-
-            // --- STEP 4: THE SEGMENT SELECTOR ---
-            *--stack_ptr = 0x10;                // ds
-
-            task_list[i].esp = (uint32_t)stack_ptr;
-            task_list[i].state = 1; // READY
-            
-            return i;
-        }
+    // 1. Clear visual metadata (Your original logic)
+    if (task_list[id].has_drawn) {
+        VGA_print_at(" ", 0x07, task_list[id].last_x, task_list[id].last_y);
     }
-    return -1;
-}
 
+    // 2. RELEASE MEMORY (The Fix)
+    // Free the stack
+    if (task_list[id].stack_ptr != NULL) {
+        kfree(task_list[id].stack_ptr);
+        task_list[id].stack_ptr = NULL;
+    }
+
+    // Free the code image (allocated in the RUN command)
+    if (task_list[id].code_ptr != NULL) {
+        kfree(task_list[id].code_ptr);
+        task_list[id].code_ptr = NULL;
+    }
+
+    // 3. Mark as dead
+    task_list[id].state = 0;
+    task_list[id].has_drawn = 0;
+    task_list[id].last_x = 0;
+    task_list[id].last_y = 0;
+}
 void init_multitasking() {
     // 1. Clear ALL slots first to be safe
     for (int i = 0; i < MAX_TASKS; i++) {
@@ -134,6 +146,7 @@ void init_multitasking() {
     }
 
     // 2. Define Task 0 as the Shell (current execution)
+    kstrcpy(task_list[0].name, "shell");
     task_list[0].state = 1; 
     current_task_idx = 0;
 
@@ -154,8 +167,7 @@ uint32_t task_get_esp(int id) {
     return task_list[id].esp;
 }
 
-int spawn_external_task(void* code_location) {
-    // This is essentially the same as your current spawn_task, 
-    // but we treat the pointer as the entry point.
-    return spawn_task((void(*)())code_location);
+char* task_get_name(int id) {
+    if (id < 0 || id >= MAX_TASKS) return "unused";
+    return task_list[id].name;
 }

@@ -9,7 +9,7 @@
 #include "multiboot.h"
 #include "task.h"
 #include "paging.h"
-
+#include "kheap.h"
 // External references for memory and info
 struct multiboot_info* mb_info;
 extern char end;
@@ -21,7 +21,7 @@ void kmain(uint32_t magic, uint32_t addr) {
     
     gdt_init();
     idt_init();       // Loads LIDT, but DOES NOT call STI yet.
-    
+    init_kheap(); 
     uint32_t ram_kb = mb_info->mem_upper + 1024;
     pmm_init(ram_kb * 1024, (uint32_t)&end); 
     paging_init();

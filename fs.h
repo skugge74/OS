@@ -16,7 +16,7 @@ typedef struct {
 void init_fs();
 int kcreate_file(char* name, char* data);
 void klist_files();
-
+uint32_t fs_get_size_by_name(char* name);
 char* fs_get_name(int index);
 uint32_t fs_get_size(int index);
 char* fs_get_data(char* name);

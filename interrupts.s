@@ -76,32 +76,43 @@ isr_common_stub:
     iret
 
 ; --- Hardware IRQ Handlers ---
-
-[extern timer_handler]
-[extern keyboard_handler]
+; At the top of your file with other externs
+extern timer_handler
+extern keyboard_handler
+extern next_stack_ptr    ; We assume this is defined in idt.c or task.c
 
 global irq0_handler
 irq0_handler:
     push byte 0         ; Dummy error code
     push byte 32        ; Interrupt number
-    pusha               
-    mov ax, ds
-    push eax            ; Save DS
+    pusha               ; Save EDI, ESI, EBP, ESP, EBX, EDX, ECX, EAX
+    
+    mov ax, ds          ; Save current Data Segment
+    push eax            
 
-    mov ax, 0x10
+    mov ax, 0x10        ; Load Kernel Data Segment
     mov ds, ax
     mov es, ax
 
-    push esp
+    push esp            ; Pass the current stack frame to the C handler
     call timer_handler
-    add esp, 4
+    add esp, 4          ; Clean up the pushed ESP
 
-    pop eax             ; Restore DS
+    ; --- THE TASK SWITCH LOGIC ---
+    ; After timer_handler, next_stack_ptr contains the ESP of the next task
+    mov eax, [next_stack_ptr]
+    test eax, eax       ; Faster check for NULL
+    jz .no_switch
+    mov esp, eax        ; ACTUAL SWITCH: Change the CPU stack pointer
+.no_switch:
+
+    pop eax             ; Restore Data Segment
     mov ds, ax
     mov es, ax
-    popa
+    
+    popa                ; Restore registers for the NEW task
     add esp, 8          ; Clean up error code and int_no
-    iret
+    iret                ; Exit interrupt and jump to the new task's EIP
 
 global irq1_handler
 irq1_handler:
@@ -125,7 +136,6 @@ irq1_handler:
     popa
     add esp, 8          
     iret
-
 ; --- System Call Handler (int 0x80) ---
 
 [extern syscall_handler]

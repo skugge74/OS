@@ -6,6 +6,7 @@
 #include "pmm.h"
 #include "task.h"
 #include "fs.h" 
+#include "kheap.h" 
 
 extern uint32_t system_ticks;
 extern uint32_t total_pages;
@@ -45,34 +46,78 @@ void execute_command(char* input) {
       if (arg) kprintf("%s\n", arg);
       else kprintf("Usage: ECHO <text>\n");
     }
+    else if (kstrcmp(input, "STAT") == 0) {
+      kheap_stats();  
+  }
 
-else if (kstrncmp(input, "RUN", 3) == 0) {
-        char* filename = input + 4; // Skip "run " to get "clock.bin"
-        
-        // 1. Get the memory address of the file data
-        char* file_data = fs_get_data(filename);
-        
-        if (file_data != 0) {
-            VGA_print("Spawning process: ", COLOR_GREEN);
-            VGA_print(filename, COLOR_GREEN);
-            VGA_print("\n", COLOR_WHITE);
+else if (kstrcmp(input, "RUN") == 0) {
+    if (arg) {
+        int idx = -1;
+        for (int i = 0; i < MAX_FILES; i++) {
+            if (fs_is_active(i) && kstrcmp(fs_get_name(i), arg) == 0) {
+                idx = i;
+                break;
+            }
+        }
+
+        if (idx != -1) {
+            char* file_data = fs_get_data(arg);
+            uint32_t size = fs_get_size(idx);
+
+            // 1. Allocate RAW memory (Store for kfree)
+            void* raw_code = kmalloc(size + 0x1000);
+            if (!raw_code) {
+                kprintf("Memory allocation failed\n");
+                return;
+            }
+
+            // 2. Calculate the ALIGNED address for execution
+            uint32_t aligned_code = (uint32_t)raw_code;
+           if (aligned_code & 0xFFF) {
+    aligned_code = (aligned_code + 0xFFF) & 0xFFFFF000;
+}
+
+            // 3. Copy the binary to the ALIGNED address
+            kmemcpy((void*)aligned_code, file_data, size);
+
+            // 4. Spawn the task
+            // We pass aligned_code as the entry point function
+            int tid = spawn_task((void(*)())aligned_code, raw_code, arg);
             
-            // 2. Treat that memory address as a function pointer
-            spawn_task((void(*)())file_data);
+            kprintf("Spawned %s (TID: %d, At: 0x%x)\n", arg, tid, aligned_code);
         } else {
-            VGA_print("File not found.\n", COLOR_RED);
+            kprintf("File not found: %s\n", arg);
         }
     }
- 
+}
+
+  else if (kstrcmp(input, "TEST_MALLOC") == 0) {
+    kprintf("Allocating 100KB...\n");
+    void* p = kmalloc(102400); 
+    kheap_stats();
+    
+    kprintf("Freeing 100KB...\n");
+    kfree(p);
+    kheap_stats();
+}
 else if (kstrcmp(input, "HEXDUMP") == 0) {
     if (arg) {
-        char* data = fs_get_data(arg);
-        if (data) {
-            // Now we just call the function
-            kprintf("Hexdump of %s:\n", arg);
-            hexdump(data, 64); 
+        // 1. Find the file index first to get the size
+        int found_idx = -1;
+        for (int i = 0; i < MAX_FILES; i++) {
+            if (fs_is_active(i) && kstrcmp(fs_get_name(i), arg) == 0) {
+                found_idx = i;
+                break;
+            }
+        }
+
+        if (found_idx != -1) {
+            char* data = fs_get_data(arg);
+            uint32_t size = fs_get_size(found_idx);
+            kprintf("Dumping %s (%d bytes):\n", arg, size);
+            hexdump((void*)data, size); // Use the function we created!
         } else {
-            kprintf("File not found.\n");
+            kprintf("File not found: %s\n", arg);
         }
     }
 }
@@ -141,14 +186,29 @@ else if (kstrcmp(input, "CAT") == 0) {
         }
     }
 }
-  else if (kstrcmp(input, "PS") == 0) {
-      kprintf("TID   STATE      ESP\n");
-      for (int i = 0; i < 10; i++) {
+else if (kstrcmp(input, "PS") == 0) {
+    kprintf("TID   NAME         STATE\n");
+    for (int i = 0; i < MAX_TASKS; i++) {
         if (task_is_ready(i)) {
-          kprintf("%d     READY      0x%x\n", i, task_get_esp(i));
+            char* name = task_get_name(i);
+            
+            kprintf("%d     ", i); // Print TID
+            kprintf(name);         // Print Name
+            
+            // Manually pad with spaces so the "STATE" column aligns
+            int len = kstrlen(name);
+            for (int j = 0; j < (12 - len); j++) {
+                kprintf(" ");
+            }
+            
+            kprintf(" READY\n");
         }
-      }
-    }else if (kstrcmp(input, "KILL") == 0) {
+    }
+}
+
+
+
+  else if (kstrcmp(input, "KILL") == 0) {
         if (arg) {
             // arg points to the character after the space (e.g., "1")
             int id = arg[0] - '0';
