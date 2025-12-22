@@ -16,6 +16,7 @@ struct task {
     int has_drawn; // Boolean flag: did this task ever print?
     void* stack_ptr; // Store this so we can kfree it!
     void* code_ptr;  // Store this so we can kfree it!
+    uint32_t total_ticks; // Accumulated CPU time
 };
 
 void init_multitasking();
@@ -30,4 +31,5 @@ void shell_task();
 char* task_get_name(int id);
 int task_get_state(int id);
 int task_get_sleep_ticks(int id);
+int task_get_total_ticks(int id);
 #endif

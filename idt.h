@@ -1,9 +1,10 @@
 #ifndef IDT
 #define IDT
 
-
 #include <stdint.h>
 
+
+extern uint32_t timer_frequency; // Global variable to store the frequency
 struct idt_entry {
     uint16_t base_low;    // Lower 16 bits of handler function address
     uint16_t sel;         // Kernel segment selector

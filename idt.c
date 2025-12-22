@@ -159,20 +159,28 @@ uint32_t next_stack_ptr = 0;
 void timer_handler(struct registers *regs) {
     system_ticks++;
 
+    // --- NEW: CPU Accounting ---
+    // Increment the tick count for the task that was just interrupted.
+    // This tracks how much actual CPU time each process is getting.
+    if (task_list[current_task_idx].state != 0) {
+        task_list[current_task_idx].total_ticks++;
+    }
+
     // 1. Update sleeping tasks
     for (int i = 0; i < MAX_TASKS; i++) {
-        if (task_list[i].state == 2) { 
+        if (task_list[i].state == 2) { // 2 = SLEEPING
             if (task_list[i].sleep_ticks > 0) {
                 task_list[i].sleep_ticks--;
             } 
-            // Check again after decrementing
+            // Check again after decrementing to wake up immediately if time is up
             if (task_list[i].sleep_ticks == 0) {
-                task_list[i].state = 1; 
+                task_list[i].state = 1; // Wake up! Set to READY
             }
         }
     }
 
     // 2. Save current task ESP
+    // This stores the stack pointer so we can resume this task later
     task_list[current_task_idx].esp = (uint32_t)regs;
 
     // 3. Find NEXT task that is READY (state 1)
@@ -183,12 +191,13 @@ void timer_handler(struct registers *regs) {
         check_count++;
     }
 
+    // Update global pointers for the Assembly stub to perform the switch
     current_task_idx = next_task;
     next_stack_ptr = task_list[current_task_idx].esp;
 
+    // Send End of Interrupt (EOI) to the PIC
     outb(0x20, 0x20);
 }
-
 // Track shift state globally in idt.c or io.c
 static int shift_pressed = 0;
 

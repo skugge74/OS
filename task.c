@@ -53,6 +53,10 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
             task_list[i].last_x = 0;
             task_list[i].last_y = 0;
             
+            // Initialize CPU Accounting and Sleep state ---
+            task_list[i].total_ticks = 0;    // Reset CPU odometer
+            task_list[i].sleep_ticks = 0;    // Ensure it doesn't start asleep
+      
             // Copy name safely
             kstrncpy(task_list[i].name, name, 15);
             task_list[i].name[15] = '\0'; 
@@ -183,4 +187,8 @@ int task_get_state(int id){
 int task_get_sleep_ticks(int id){
   if (id < 0 || id >= MAX_TASKS) return -1;
   return task_list[id].sleep_ticks;
+}
+int task_get_total_ticks(int id){
+  if (id < 0 || id >= MAX_TASKS) return -1;
+  return task_list[id].total_ticks;
 }

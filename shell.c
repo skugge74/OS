@@ -7,6 +7,7 @@
 #include "task.h"
 #include "fs.h" 
 #include "kheap.h" 
+#include "idt.h"
 
 extern uint32_t system_ticks;
 extern uint32_t total_pages;
@@ -222,7 +223,32 @@ else if (kstrcmp(input, "PS") == 0) {
     }
 }
 
+else if (kstrcmp(input, "TOP") == 0) {
+    run_top();
+    VGA_clear();
+}
 
+else if (kstrcmp(input, "UPTIME") == 0) {
+    // Total seconds = total ticks / ticks per second
+    uint32_t total_seconds = system_ticks / timer_frequency;
+    
+    uint32_t h = total_seconds / 3600;
+    uint32_t m = (total_seconds % 3600) / 60;
+    uint32_t s = total_seconds % 60;
+
+   kprintf("System Uptime: ");
+    
+    // Manual leading zero for Hours
+    if (h < 10) kprintf("0");
+    kprintf("%d:", h);
+    
+    // Manual leading zero for Minutes
+    if (m < 10) kprintf("0");
+    kprintf("%d:", m);
+    
+    // Manual leading zero for Seconds
+    if (s < 10) kprintf("0");
+    kprintf("%d\n", s);}
 
   else if (kstrcmp(input, "KILL") == 0) {
         if (arg) {
@@ -248,34 +274,7 @@ else if (kstrcmp(input, "PS") == 0) {
   else if (kstrcmp(input, "CLEAR") == 0) {
       VGA_clear();
     }
-    /*else if (kstrcmp(input, "GHOST") == 0) {
-      kprintf("Writing to 0x200000...\n");
-      // volatile ensures the compiler doesn't skip this write
-      // unsigned char ensures we handle bytes correctly
-      volatile unsigned char* ghost_ptr = (volatile unsigned char*)0x200000;
-    
-      // Let's write a long string of Red 'X's to make it impossible to miss
-      // Row 12, Column 30 is roughly (12 * 80 + 30) * 2 = 1980
-      int start = 1980;
-      for(int i = 0; i < 20; i+=2) {
-        ghost_ptr[start + i] = 'X';      // Character
-        ghost_ptr[start + i + 1] = 0x4F; // Bright White on Red background
-      }
-      kprintf("Done. Look for a Red bar in the center!\n");
-    }else if (kstrcmp(input, "MALLOC") == 0) {
-      void* ptr1 = pmm_alloc_page();
-      void* ptr2 = pmm_alloc_page();
-      kprintf("Allocated Page 1 at: %x\n", (uint32_t)ptr1);
-      kprintf("Allocated Page 2 at: %x\n", (uint32_t)ptr2);
-      kprintf("Difference: %d bytes (Should be 4096)\n", (uint32_t)ptr2 - (uint32_t)ptr1);
-    }else if (kstrcmp(input, "MEM") == 0) {
-      uint32_t ram_mb = (total_pages * 4096) / 1024 / 1024;
-      kprintf("Physical Pages: %d\n", total_pages);
-      kprintf("Total RAM:      %d MB\n", ram_mb);
-    }else if (kstrcmp(input, "STATUS") == 0) {
-        kprintf_color(COLOR_GREEN, "Uptime: %d seconds\n", system_ticks / 1000);
-    }*/
-    else if (kstrcmp(input, "REBOOT") == 0) {
+        else if (kstrcmp(input, "REBOOT") == 0) {
         kprintf("Rebooting system...\n");  
         // Wait for the keyboard controller to be ready
         uint8_t good = 0x02;
@@ -291,4 +290,56 @@ else if (kstrcmp(input, "PS") == 0) {
     }else {
         kprintf("Unknown command: %s\n", input);
     }
+}
+void run_top() {
+// 1. CLEAR the keyboard buffer so we don't process old keys
+    while (has_key_in_buffer()) {
+        get_key_from_buffer();
+    }
+    // Initial clear
+    VGA_clear();
+    
+    while (1) {
+        // Move cursor to 0,0 or clear
+        VGA_clear(); 
+
+
+        kprintf("KDXOS TOP - System Ticks: %d\n", system_ticks);
+        kprintf("Press 'q' to return to Shell\n");
+        kprintf("-------------------------------------------\n");
+        kprintf("TID   NAME         STATE      CPU-TICKS\n");
+
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (task_get_state(i) != 0) {
+                // Print TID and Name
+                kprintf("%d     %s", i, task_get_name(i));
+
+                // Manual Padding for Name Column (since no %-13s)
+                int name_len = kstrlen(task_get_name(i));
+                for (int j = 0; j < (13 - name_len); j++) kprintf(" ");
+
+                // Print State
+                if (task_get_state(i) == 1)      kprintf("READY      ");
+                else if (task_get_state(i) == 2) kprintf("SLEEP      ");
+
+                // Print Ticks (We added this field to the task struct earlier)
+                kprintf("%d\n", task_get_total_ticks(i));
+            }
+        }
+
+        // --- NON-BLOCKING CHECK ---
+        // We use your io.c functions here
+        if (has_key_in_buffer()) {
+            char c = get_key_from_buffer(); 
+            if (c == 'q' || c == 'Q') {
+                break; // Exit the loop
+            }
+        }
+
+        // Refresh Rate
+        sleep(500); 
+    }
+    
+    VGA_clear();
+    kprintf("Returned to Shell.\n");
 }

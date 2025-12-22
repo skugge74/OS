@@ -6,4 +6,5 @@ void shell_init();
 void shell_update();
 void execute_command(char* input);
 void dummy_app();
+void run_top();
 #endif
