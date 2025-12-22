@@ -1,0 +1,109 @@
+#include "io.h"
+#include "task.h"
+// Tell the compiler these are defined in idt.c
+extern char kbd_buffer[KEYBOARD_BUFFER_SIZE];
+extern int kbd_head;
+extern int kbd_tail;
+// A simple circular buffer for the keyboard
+static char key_buffer[256];
+static int head = 0;
+static int tail = 0;
+
+// This is what the Linker is looking for!
+int has_key_in_buffer() {
+    return head != tail;
+}
+
+char get_key_from_buffer() {
+    if (head == tail) return 0;
+    char c = key_buffer[tail];
+    tail = (tail + 1) % 256;
+    return c;
+}
+
+// This is what your IRQ1 handler should call when a key is pressed
+void keyboard_push_char(char c) {
+    int next = (head + 1) % 256;
+    if (next != tail) { // Don't overwrite if buffer is full
+        key_buffer[head] = c;
+        head = next;
+    }
+}
+
+uint8_t keyboard_read_status() {
+    return inb(0x64);
+}
+
+uint8_t keyboard_read_scancode() {
+    return inb(0x60);
+}
+
+char keyboard_getchar() {
+    // Check if a key is actually waiting in your buffer
+    while (!has_key_in_buffer()) {
+        yield(); // Give CPU to spin.bin while waiting for a finger to press a key!
+    }
+    return get_key_from_buffer();
+}// Now accepts 'shift' as an argument
+char scancode_to_ascii(uint8_t scancode, int shift) {
+    switch(scancode) {
+        // Number row
+        case 0x02: return shift ? '!' : '1';
+        case 0x03: return shift ? '@' : '2';
+        case 0x04: return shift ? '#' : '3';
+        case 0x05: return shift ? '$' : '4';
+        case 0x06: return shift ? '%' : '5';
+        case 0x07: return shift ? '^' : '6';
+        case 0x08: return shift ? '&' : '7';
+        case 0x09: return shift ? '*' : '8';
+        case 0x0A: return shift ? '(' : '9';
+        case 0x0B: return shift ? ')' : '0';
+        case 0x0C: return shift ? '_' : '-';
+        case 0x0D: return shift ? '+' : '=';
+
+        // Letters (QWERTY)
+        case 0x10: return shift ? 'Q' : 'q';
+        case 0x11: return shift ? 'W' : 'w';
+        case 0x12: return shift ? 'E' : 'e';
+        case 0x13: return shift ? 'R' : 'r';
+        case 0x14: return shift ? 'T' : 't';
+        case 0x15: return shift ? 'Y' : 'y';
+        case 0x16: return shift ? 'U' : 'u';
+        case 0x17: return shift ? 'I' : 'i';
+        case 0x18: return shift ? 'O' : 'o';
+        case 0x19: return shift ? 'P' : 'p';
+        case 0x1E: return shift ? 'A' : 'a';
+        case 0x1F: return shift ? 'S' : 's';
+        case 0x20: return shift ? 'D' : 'd';
+        case 0x21: return shift ? 'F' : 'f';
+        case 0x22: return shift ? 'G' : 'g';
+        case 0x23: return shift ? 'H' : 'h';
+        case 0x24: return shift ? 'J' : 'j';
+        case 0x25: return shift ? 'K' : 'k';
+        case 0x26: return shift ? 'L' : 'l';
+        case 0x2C: return shift ? 'Z' : 'z';
+        case 0x2D: return shift ? 'X' : 'x';
+        case 0x2E: return shift ? 'C' : 'c';
+        case 0x2F: return shift ? 'V' : 'v';
+        case 0x30: return shift ? 'B' : 'b';
+        case 0x31: return shift ? 'N' : 'n';
+        case 0x32: return shift ? 'M' : 'm';
+
+        // Punctuation
+        case 0x1A: return shift ? '{' : '[';
+        case 0x1B: return shift ? '}' : ']';
+        case 0x27: return shift ? ':' : ';';
+        case 0x28: return shift ? '"' : '\'';
+        case 0x29: return shift ? '~' : '`';
+        case 0x2B: return shift ? '|' : '\\';
+        case 0x33: return shift ? '<' : ',';
+        case 0x34: return shift ? '>' : '.';
+        case 0x35: return shift ? '?' : '/';
+
+        // Functional
+        case 0x1C: return '\n'; // Enter
+        case 0x39: return ' ';  // Space
+        case 0x0E: return '\b'; // Backspace
+        default:   return 0;
+    }
+}
