@@ -63,7 +63,7 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
             task_list[i].sleep_ticks = 0;    // Ensure it doesn't start asleep
       
             // Copy name safely
-            kstrncpy(task_list[i].name, name, 15);
+            kstrncpy((char*)task_list[i].name, name, 15);
             task_list[i].name[15] = '\0'; 
 
             // 2. Allocate RAW memory (Store this for kfree)
@@ -159,7 +159,7 @@ void init_multitasking() {
 
     // Task 0: Shell
     task_list[0].state = 1;
-    kstrncpy(task_list[0].name, "shell", 15);
+    kstrncpy((char* )task_list[0].name, "shell", 15);
     
     // Task 9: Idle Task (Always READY)
     // Use your existing spawn_task logic or manually set it up
@@ -184,7 +184,7 @@ uint32_t task_get_esp(int id) {
 
 char* task_get_name(int id) {
     if (id < 0 || id >= MAX_TASKS) return "unused";
-    return task_list[id].name;
+    return (char*)task_list[id].name;
 }
 
 int task_get_state(int id){
