@@ -1,5 +1,4 @@
 #include <stddef.h>
-
 void itoa(int n, char* str, int base);
 void kprintf(const char* format, ...);
 void kprintf_color(int color, const char* format, ...);

@@ -6,7 +6,7 @@ LDFLAGS = -T linker.ld -m32 -nostdlib -ffreestanding -Wl,--build-id=none -no-pie
 
 # Object files to be linked
 # Add keyboard.o if you moved the keyboard logic to a separate file
-OBJ = boot.o kernel.o vga.o io.o lib.o idt.o interrupts.o gdt.o gdt_flush.o shell.o pmm.o paging.o paging_asm.o task.o kheap.o fs.o
+OBJ = boot.o kernel.o font.o vesa.o io.o lib.o idt.o interrupts.o gdt.o gdt_flush.o shell.o pmm.o paging.o paging_asm.o task.o kheap.o fs.o
 
 all: myos.iso
 
@@ -28,7 +28,7 @@ boot.o: boot.s
 
 # Compiling C files
 # The -c flag tells gcc to compile but not link yet
-kernel.o: kernel.c vga.h io.h
+kernel.o: kernel.c vesa.h io.h
 	$(CC) -c kernel.c -o kernel.o $(CFLAGS)
 
 fs.o: fs.c fs.h
@@ -39,6 +39,8 @@ fs.o: fs.c fs.h
 kheap.o: kheap.c kheap.h 
 	$(CC) -c kheap.c -o kheap.o $(CFLAGS)
 
+font.o: font.c font.h
+	$(CC) -c font.c -o font.o $(CFLAGS)
 
 
 task.o: task.c task.h io.h
@@ -48,8 +50,8 @@ task.o: task.c task.h io.h
 io.o: io.c io.h
 	$(CC) -c io.c -o io.o $(CFLAGS)
 
-vga.o: vga.c vga.h io.h
-	$(CC) -c vga.c -o vga.o $(CFLAGS)
+vesa.o: vesa.c vesa.h io.h
+	$(CC) -c vesa.c -o vesa.o $(CFLAGS)
 
 %.o: %.c
 	$(CC) -c $^ -o $@ $(CFLAGS)
@@ -68,7 +70,7 @@ shell.o: shell.c shell.h
 gdt_flush.o: gdt_flush.s
 	$(AS) -f elf32 gdt_flush.s -o gdt_flush.o
 # If you create keyboard.c, add this rule:
-# keyboard.o: keyboard.c io.h vga.h
+# keyboard.o: keyboard.c io.h vesa.h
 # 	$(CC) -c keyboard.c -o keyboard.o $(CFLAGS)
 
 # Building the ISO

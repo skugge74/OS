@@ -1,5 +1,5 @@
 #include "shell.h"
-#include "vga.h"
+#include "vesa.h"
 #include "lib.h"
 #include "io.h"
 #include "idt.h"
@@ -11,6 +11,7 @@
 
 extern uint32_t system_ticks;
 extern uint32_t total_pages;
+extern uint32_t timer_frequency;        // Add this!
 // Helper to find arguments
 char* find_space(char* str) {
     while (*str) {
@@ -65,7 +66,6 @@ else if (kstrcmp(input, "SLEEP") == 0) {
         kprintf("Usage: SLEEP [ms]\n");
     }
 }
-
 else if (kstrcmp(input, "RUN") == 0) {
     if (arg) {
         int idx = -1;
@@ -80,27 +80,27 @@ else if (kstrcmp(input, "RUN") == 0) {
             char* file_data = fs_get_data(arg);
             uint32_t size = fs_get_size(idx);
 
-            // 1. Allocate RAW memory (Store for kfree)
-            void* raw_code = kmalloc(size + 0x1000);
+            // 1. Allocate enough room to find an aligned boundary
+            // We request size + 4KB to guarantee we can align to 4KB
+            void* raw_code = kmalloc(size + 4096);
             if (!raw_code) {
                 kprintf("Memory allocation failed\n");
                 return;
             }
 
-            // 2. Calculate the ALIGNED address for execution
-            uint32_t aligned_code = (uint32_t)raw_code;
-           if (aligned_code & 0xFFF) {
-    aligned_code = (aligned_code + 0xFFF) & 0xFFFFF000;
-}
+            // 2. Find the aligned address MANUALLY
+            // We do NOT use kmalloc_a here because it breaks the header list
+            uint32_t aligned_code = ((uint32_t)raw_code + 0xFFF) & 0xFFFFF000;
 
             // 3. Copy the binary to the ALIGNED address
             kmemcpy((void*)aligned_code, file_data, size);
 
             // 4. Spawn the task
-            // We pass aligned_code as the entry point function
+            // IMPORTANT: Pass aligned_code as the entry point, 
+            // but keep raw_code as the reference for kfree later!
             int tid = spawn_task((void(*)())aligned_code, raw_code, arg);
             
-            kprintf("Spawned %s (TID: %d, At: 0x%x)\n", arg, tid, aligned_code);
+            kprintf("Spawned %s (TID: %d, Entry: 0x%x)\n", arg, tid, aligned_code);
         } else {
             kprintf("File not found: %s\n", arg);
         }
@@ -225,30 +225,39 @@ else if (kstrcmp(input, "PS") == 0) {
 
 else if (kstrcmp(input, "TOP") == 0) {
     run_top();
-    VGA_clear();
+    VESA_clear();
 }
 
 else if (kstrcmp(input, "UPTIME") == 0) {
-    // Total seconds = total ticks / ticks per second
-    uint32_t total_seconds = system_ticks / timer_frequency;
+    // 1. Snapshot the ticks and frequency immediately
+    // This prevents the values from changing mid-calculation
+    uint32_t current_ticks = system_ticks;
+    uint32_t current_freq = timer_frequency;
+
+    if (current_freq == 0) return;
+
+    uint32_t total_seconds = current_ticks / current_freq;
     
+    // 2. Calculate components
     uint32_t h = total_seconds / 3600;
     uint32_t m = (total_seconds % 3600) / 60;
     uint32_t s = total_seconds % 60;
 
-   kprintf("System Uptime: ");
+    kprintf("System Uptime: ");
     
-    // Manual leading zero for Hours
+    // 3. Print with padding
     if (h < 10) kprintf("0");
     kprintf("%d:", h);
     
-    // Manual leading zero for Minutes
     if (m < 10) kprintf("0");
     kprintf("%d:", m);
     
-    // Manual leading zero for Seconds
     if (s < 10) kprintf("0");
-    kprintf("%d\n", s);}
+    kprintf("%d\n", s);
+    kprintf("Raw Ticks: %d | Seconds: %d\n", current_ticks, total_seconds);
+}
+
+
 
   else if (kstrcmp(input, "KILL") == 0) {
         if (arg) {
@@ -272,7 +281,7 @@ else if (kstrcmp(input, "UPTIME") == 0) {
         }
     }
   else if (kstrcmp(input, "CLEAR") == 0) {
-      VGA_clear();
+      VESA_clear();
     }
         else if (kstrcmp(input, "REBOOT") == 0) {
         kprintf("Rebooting system...\n");  
@@ -297,11 +306,11 @@ void run_top() {
         get_key_from_buffer();
     }
     // Initial clear
-    VGA_clear();
+    VESA_clear();
     
     while (1) {
         // Move cursor to 0,0 or clear
-        VGA_clear(); 
+        VESA_clear(); 
 
 
         kprintf("KDXOS TOP - System Ticks: %d\n", system_ticks);
@@ -340,6 +349,6 @@ void run_top() {
         sleep(500); 
     }
     
-    VGA_clear();
+    VESA_clear();
     kprintf("Returned to Shell.\n");
 }

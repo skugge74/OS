@@ -1,8 +1,21 @@
-#ifndef MULTIBOOT
-#define MULTIBOOT
+#ifndef VESA_H
+#define VESA_H
 
 #include <stdint.h>
+#include "font.h"
+// Format: 0xRRGGBB
+#define COLOR_BLACK   0x000000
+#define COLOR_WHITE   0xFFFFFF
+#define COLOR_GREEN   0x00FF00
+#define COLOR_RED     0xFF0000
+#define COLOR_YELLOW  0xFFFF00
+#define COLOR_CYAN    0x00FFFF
+#define COLOR_BLUE    0x0000FF
+#define COLOR_MAGENTA 0xFF00FF
+#define COLOR_GREY    0x808080
 
+extern int vesa_cursor_x;
+extern int vesa_cursor_y;
 
 struct multiboot_info {
     uint32_t flags;
@@ -37,5 +50,15 @@ struct multiboot_info {
     uint32_t framebuffer_height;
     uint8_t  framebuffer_bpp;
     uint8_t  framebuffer_type;
-};
-#endif // !MULTIBOOT
+}__attribute__((packed));
+
+void VESA_print_at(const char* str, int x, int y, uint32_t color);
+void VESA_init(struct multiboot_info* mbi);
+void VESA_putpixel(int x, int y, uint32_t color);
+void VESA_print(const char* str, uint32_t color);
+void VESA_clear();
+void VESA_draw_rect(int x, int y, int w, int h, uint32_t color);
+void VESA_draw_char(char c, int x, int y, uint32_t color);
+void VESA_scroll();
+
+#endif // !VESA_H

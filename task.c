@@ -1,5 +1,5 @@
 #include "task.h"
-#include "vga.h"
+#include "vesa.h"
 #include <stdint.h>
 #include "kheap.h"
 #include "io.h"
@@ -11,36 +11,41 @@
 // External assembly function
 extern void switch_to_stack(uint32_t* old_esp, uint32_t new_esp);
 extern volatile uint32_t system_ticks;
+int multitasking_enabled = 0;
 // The Task Control Block (TCB) array
-struct task task_list[MAX_TASKS];
+volatile struct task task_list[MAX_TASKS];
 int current_task_idx = 0;
 void shell_task() {
     char line[128];
     int idx = 0;
 
-    VGA_print("KDXOS Shell Started.\n", COLOR_CYAN);
-    VGA_print("> ", COLOR_YELLOW);
+    VESA_print("KDXOS Shell Started.\n", COLOR_CYAN);
+    VESA_print("> ", COLOR_YELLOW);
 
     while(1) {
         char c = keyboard_getchar(); // This must call yield() internally if no key
 
         if (c == '\n') {
             line[idx] = '\0';
-            VGA_print("\n", 0x07);
+            VESA_print("\n", COLOR_WHITE);
             if (idx > 0) {
                 execute_command(line); 
             }
             idx = 0;
-            VGA_print("> ", COLOR_YELLOW);
+            VESA_print("> ", COLOR_YELLOW);
         } 
         else if (c == '\b' && idx > 0) {
+            // backspace and non empty line
             idx--;
-            VGA_print("\b", 0x07);
+            if (vesa_cursor_x >= 8) {
+              vesa_cursor_x -= 8;
+            }
+            VESA_draw_char(' ', vesa_cursor_x, vesa_cursor_y, 0x222222); 
         } 
         else if (idx < 127 && c >= ' ') {
             line[idx++] = c;
             char str[2] = {c, '\0'};
-            VGA_print(str, 0x0F);
+            VESA_print(str, 0x0F);
         }
     }
 }
@@ -120,7 +125,8 @@ void kill_task(int id) {
 
     // 1. Clear visual metadata (Your original logic)
     if (task_list[id].has_drawn) {
-        VGA_print_at(" ", 0x07, task_list[id].last_x, task_list[id].last_y);
+        //VESA_print_at(" ", COLOR_WHITE, task_list[id].last_x, task_list[id].last_y);
+        VESA_draw_char(' ', task_list[id].last_x, task_list[id].last_y, 0x222222);
     }
 
     // 2. RELEASE MEMORY (The Fix)
@@ -148,6 +154,7 @@ void idle_task_code() {
     }
 }
 void init_multitasking() {
+    multitasking_enabled = 1;
     for (int i = 0; i < MAX_TASKS; i++) task_list[i].state = 0;
 
     // Task 0: Shell

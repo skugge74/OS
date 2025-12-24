@@ -1,7 +1,8 @@
-#include "vga.h"
+#include "vesa.h"
 #include <stdarg.h>
 #include "lib.h"
 #include <stddef.h>
+extern int timer_frequency;
 
 int kstrcmp(const char* a, const char* b) {
     while (*a && (*a == *b)) {
@@ -65,36 +66,35 @@ void kprintf(const char* format, ...) {
                 case 'c': {
                     char c = (char)va_arg(args, int);
                     char str[2] = {c, '\0'};
-                    VGA_print(str, 0x07);
+                    VESA_print(str, COLOR_WHITE);
                     break;
                 }
                 case 's': {
                     char* s = va_arg(args, char*);
-                    VGA_print(s, 0x07);
+                    VESA_print(s, COLOR_WHITE);
                     break;
                 }
                 case 'd': {
                     int d = va_arg(args, int);
                     char buf[32];
                     itoa(d, buf, 10);
-                    VGA_print(buf, 0x07);
+                    VESA_print(buf, COLOR_WHITE);
                     break;
                 }
                 case 'x': {
                     int x = va_arg(args, int);
                     char buf[32];
                     itoa(x, buf, 16);
-                    //VGA_print("0x", 0x07); // Prefix for hex
-                    VGA_print(buf, 0x07);
+                    VESA_print(buf, COLOR_WHITE);
                     break;
                 }
                 default:
-                    VGA_print("%", 0x07);
+                    VESA_print("%", COLOR_WHITE);
                     break;
             }
         } else {
             char str[2] = {format[i], '\0'};
-            VGA_print(str, 0x07);
+            VESA_print(str, COLOR_WHITE);
         }
     }
     va_end(args);
@@ -110,34 +110,34 @@ void kprintf_color(int color, const char* format, ...) {
             switch (format[i]) {
                 case 's': {
                     char* s = va_arg(args, char*);
-                    VGA_print(s, color); // Use the passed color!
+                    VESA_print(s, color); // Use the passed color!
                     break;
                 }
                 case 'd': {
                     int d = va_arg(args, int);
                     char buf[32];
                     itoa(d, buf, 10);
-                    VGA_print(buf, color);
+                    VESA_print(buf, color);
                     break;
                 }
                 case 'x': {
                     int x = va_arg(args, int);
                     char buf[32];
                     itoa(x, buf, 16);
-                    VGA_print("0x", color);
-                    VGA_print(buf, color);
+                    VESA_print("0x", color);
+                    VESA_print(buf, color);
                     break;
                 }
                 case 'c': {
                     char c = (char)va_arg(args, int);
                     char str[2] = {c, '\0'};
-                    VGA_print(str, color);
+                    VESA_print(str, color);
                     break;
                 }
             }
         } else {
             char str[2] = {format[i], '\0'};
-            VGA_print(str, color);
+            VESA_print(str, color);
         }
     }
     va_end(args);
@@ -214,10 +214,8 @@ void hexdump(void* ptr, int size) {
     }
 }
 void sleep(int ms) {
-    __asm__ volatile (
-        "mov $3, %%eax \n" // Syscall number 3
-        "mov %0, %%ebx \n" // Number of ms
-        "int $0x80     \n"
-        : : "r"(ms) : "eax", "ebx"
-    );
+    uint32_t end = system_ticks + (ms / (1000 / timer_frequency));
+    while (system_ticks < end) {
+        __asm__ volatile("hlt"); // Wait for next interrupt
+    }
 }

@@ -6,7 +6,7 @@
 // Every block of memory on the heap starts with this header
 typedef struct header {
     uint32_t size;   // Size of the block (excluding this header)
-    uint8_t  is_free; // 1 if the block can be reused, 0 if it's taken
+    uint32_t  is_free; // 1 if the block can be reused, 0 if it's taken
     struct header* next;
 } header_t;
 

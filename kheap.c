@@ -8,52 +8,20 @@ uint32_t placement_address = (uint32_t)&end;
 header_t* heap_start = NULL;
 
 void init_kheap() {
-    // Align the start to 4KB for safety
-    if (placement_address & 0xFFF) {
-        placement_address &= 0xFFFFF000;
-        placement_address += 0x1000;
-    }
+    // Move the heap to 4MB. This is usually safe from kernel and multiboot data.
+    // 0x400000 = 4MB
+    uint32_t start_node = 0x400000; 
 
-    heap_start = (header_t*)placement_address;
-    heap_start->size = 0x100000; // Let's start with a 1MB initial "pool"
+    heap_start = (header_t*)start_node;
+    
+    // Set the initial block to 1MB
+    heap_start->size = 1048576; 
     heap_start->is_free = 1;
     heap_start->next = NULL;
 
-    placement_address += (sizeof(header_t) + heap_start->size);
+    kprintf("Heap safely started at 0x%x\n", start_node);
 }
 
-void* kmalloc(uint32_t size) {
-    header_t* curr = heap_start;
-
-    while (curr) {
-        // Find a block that is FREE and BIG ENOUGH
-        if (curr->is_free && curr->size >= size) {
-            
-            // Can we split? (Need room for: requested size + new header + small buffer)
-            if (curr->size > (size + sizeof(header_t) + 32)) {
-                // 1. Create the new header for the remaining space
-                header_t* next_block = (header_t*)((uint32_t)curr + sizeof(header_t) + size);
-                
-                // 2. Set metadata for the new free block
-                next_block->size = curr->size - size - sizeof(header_t);
-                next_block->is_free = 1;
-                next_block->next = curr->next;
-
-                // 3. Shrink current block to requested size and link it to the new one
-                curr->size = size;
-                curr->next = next_block;
-            }
-
-            // 4. MARK AS USED - This is what makes STAT work!
-            curr->is_free = 0;
-
-            // Return the data area (after the header)
-            return (void*)((uint32_t)curr + sizeof(header_t));
-        }
-        curr = curr->next;
-    }
-    return NULL; // No memory left!
-}
 
 void kfree(void* ptr) {
     if (!ptr) return;
@@ -74,24 +42,6 @@ void kfree(void* ptr) {
     // but that requires a "doubly linked list." For now, this helps a lot!
 }
 
-void* kmalloc_a(uint32_t size) {
-    // 1. Calculate how much extra space we need to guarantee alignment
-    // We add 4KB to ensure we can find a spot that starts at 0x...000
-    uint32_t total_needed = size + 0x1000; 
-    
-    // 2. Call the REAL kmalloc that handles headers and stats
-    void* ptr = kmalloc(total_needed);
-    
-    // 3. Align the returned pointer
-    uint32_t addr = (uint32_t)ptr;
-    if (addr & 0xFFF) {
-        addr &= 0xFFFFF000;
-        addr += 0x1000;
-    }
-    
-    return (void*)addr;
-}
-
 void* kmemcpy(void* dest, const void* src, uint32_t n) {
     __asm__ volatile (
         "movl %0, %%edi\n"
@@ -110,19 +60,86 @@ void kheap_stats() {
     uint32_t used_mem = 0;
     uint32_t blocks = 0;
     
-    // START walking from the existing heap_start
     header_t* curr = heap_start;
+    uint32_t heap_limit = (uint32_t)heap_start + 0x100000; // 1MB limit
 
-    while (curr) {
+    kprintf("Scanning Heap at 0x%x...\n", (uint32_t)heap_start);
+
+    while (curr != NULL) {
+        // --- THE SAFETY CHECK ---
+        // If curr is outside the 1MB pool, the list is broken. 
+        // Stop here instead of rebooting!
+        if ((uint32_t)curr < (uint32_t)heap_start || (uint32_t)curr >= heap_limit) {
+            kprintf("Error: Heap linked-list corrupted at 0x%x\n", (uint32_t)curr);
+            break;
+        }
+
         if (curr->is_free) {
             free_mem += curr->size;
         } else {
             used_mem += curr->size;
         }
+        
         blocks++;
+
+        // Safety: If size is 0, we will loop forever. Stop that.
+        if (curr->size == 0 && curr->next != NULL) {
+            kprintf("Error: Zero-size block detected.\n");
+            break;
+        }
+
         curr = curr->next;
     }
 
-    kprintf("Heap Status: %d blocks\n", blocks);
-    kprintf("Used: %d bytes | Free: %d bytes\n", used_mem, free_mem);
+    kprintf("Blocks: %d | Used: %d | Free: %d\n", blocks, used_mem, free_mem);
+}
+
+void* kmalloc(uint32_t size) {
+    header_t* curr = heap_start;
+
+    while (curr) {
+        if (curr->is_free && curr->size >= size) {
+            
+            // --- THE FIX: Only split if there is REAL room ---
+            // You need: Requested Size + Header Size + at least 4 bytes of data
+            uint32_t needed_for_split = size + sizeof(header_t) + 4;
+
+            if (curr->size >= needed_for_split) {
+                // Calculate position of the new header
+                header_t* next_block = (header_t*)((uint32_t)curr + sizeof(header_t) + size);
+                
+                // Calculate remaining size safely
+                next_block->size = curr->size - size - sizeof(header_t);
+                next_block->is_free = 1;
+                next_block->next = curr->next;
+
+                curr->size = size;
+                curr->next = next_block;
+            }
+            // If it's not big enough to split, we just take the whole block
+            // and DON'T subtract the header size from the data size.
+
+            curr->is_free = 0;
+            return (void*)((uint32_t)curr + sizeof(header_t));
+        }
+        curr = curr->next;
+    }
+    return NULL;
+}
+void* kmalloc_a(uint32_t size) {
+    // 1. We allocate enough extra space to find an aligned spot 
+    // without ever moving the actual header.
+    uint32_t total_needed = size + 4096; 
+    void* ptr = kmalloc(total_needed);
+    if (!ptr) return NULL;
+
+    uint32_t addr = (uint32_t)ptr;
+    
+    // 2. If it's already aligned, just return it
+    if (!(addr & 0xFFF)) return ptr;
+
+    // 3. Otherwise, find the next aligned address WITHIN the block we just got
+    uint32_t aligned_addr = (addr + 0xFFF) & 0xFFFFF000;
+    
+    return (void*)aligned_addr;
 }

@@ -1,8 +1,8 @@
 #include "idt.h"
-#include "vga.h"
 #include "io.h"
 #include "lib.h"
 #include "task.h"
+#include "vesa.h"
 
 uint32_t timer_frequency = 0; // Global variable to store the frequency
 extern struct task task_list[];
@@ -37,16 +37,18 @@ char *exception_messages[] = {
 // Ensure your 'struct registers' is defined in idt.h exactly 
 // as the stack was pushed in assembly!
 void isr_handler(struct registers *r) {
-    VGA_clear();
+    VESA_clear();
     for(int i = 0; i < 80 * 25; i++) {
         ((uint16_t*)0xB8000)[i] = (uint16_t)' ' | (uint16_t)0x1F << 8;
     }
-    cursor_pos = 0;
+    vesa_cursor_x = 0;
+    vesa_cursor_y = 0;
 
-    kprintf_color(0x1F, "--- KERNEL PANIC ---\n");
-    kprintf_color(0x1F, "Interrupt: %d (%s)\n", r->int_no, exception_messages[r->int_no]);
-    kprintf_color(0x1F, "EIP: %x  EAX: %x  EBX: %x\n", r->eip, r->eax, r->ebx);
-    kprintf_color(0x1F, "ECX: %x  EDX: %x\n", r->ecx, r->edx);
+
+    kprintf_color(COLOR_WHITE, "--- KERNEL PANIC ---\n");
+    kprintf_color(COLOR_WHITE, "Interrupt: %d (%s)\n", r->int_no, exception_messages[r->int_no]);
+    kprintf_color(COLOR_WHITE, "EIP: %x  EAX: %x  EBX: %x\n", r->eip, r->eax, r->ebx);
+    kprintf_color(COLOR_WHITE, "ECX: %x  EDX: %x\n", r->ecx, r->edx);
     
     while(1) __asm__("hlt");
 }
@@ -137,20 +139,14 @@ void idt_init() {
 
 
 
-
 void timer_init(uint32_t frequency) {
-    timer_frequency = frequency; // Save it for the syscall handler!
+    if (frequency == 0) frequency = 1; // Prevent division by zero
+    timer_frequency = frequency; 
 
-    // The PIT has an internal clock of 1.193182 MHz
     uint32_t divisor = 1193182 / frequency;
-
     outb(0x43, 0x36);
-
-    uint8_t l = (uint8_t)(divisor & 0xFF);
-    uint8_t h = (uint8_t)((divisor >> 8) & 0xFF);
-
-    outb(0x40, l);
-    outb(0x40, h);
+    outb(0x40, (uint8_t)(divisor & 0xFF));
+    outb(0x40, (uint8_t)((divisor >> 8) & 0xFF));
 }
 
 // Define this at the top of idt.c
@@ -158,7 +154,7 @@ uint32_t next_stack_ptr = 0;
 
 void timer_handler(struct registers *regs) {
     system_ticks++;
-
+if (multitasking_enabled){
     // --- NEW: CPU Accounting ---
     // Increment the tick count for the task that was just interrupted.
     // This tracks how much actual CPU time each process is getting.
@@ -194,7 +190,7 @@ void timer_handler(struct registers *regs) {
     // Update global pointers for the Assembly stub to perform the switch
     current_task_idx = next_task;
     next_stack_ptr = task_list[current_task_idx].esp;
-
+  }
     // Send End of Interrupt (EOI) to the PIC
     outb(0x20, 0x20);
 }
@@ -228,21 +224,16 @@ void keyboard_handler(struct registers *regs) {
     outb(0x20, 0x20);
 }
 void syscall_handler(struct registers *regs) {
-//VGA_print_at(".", 0x0F, 79, 0);
-    if (regs->eax == 1) { // Print Char At
+    if (regs->eax == 1) { // Print Char
         char c = (char)regs->ebx;
         int x = regs->ecx;
         int y = regs->edx;
         
-        // --- General Cleanup Logic ---
-        // Save coordinates in the PCB so kill_task knows where to wipe
         task_list[current_task_idx].last_x = x;
         task_list[current_task_idx].last_y = y;
         task_list[current_task_idx].has_drawn = 1;
-
-        char str[2] = {c, '\0'};
-        // 0x0E is Yellow on Black. (If your background is still blue, change to 0x1E)
-        VGA_print_at(str, 0x0E, x, y); 
+        // Use your VESA function to draw it!
+        VESA_draw_char(c, x, y, 0xFFFFFF); 
     } 
     else if (regs->eax == 2) { // Get Ticks
         regs->eax = system_ticks; 
