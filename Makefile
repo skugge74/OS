@@ -31,7 +31,7 @@ disk:
 	# Format it as FAT16
 	sudo mkfs.fat -F 16 disk.img
 	# Copy your spinner.bin into it (mount it first)
-copy: 
+copy: disk 
 	mcopy -i disk.img test.txt ::/text.txt
 lsdisk:
 	mdir -i disk.img ::/

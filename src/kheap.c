@@ -6,41 +6,62 @@ extern uint32_t end;
 uint32_t placement_address = (uint32_t)&end;
 
 header_t* heap_start = NULL;
-void init_kheap() {
-    uint32_t start_node = 0x800000; 
 
-    // CRITICAL: Zero out the memory where the header will live
-    // If there is old data here, kmalloc will think the list is corrupted
-    kmemset((void*)start_node, 0, sizeof(header_t) / 4); 
+
+void init_kheap() {
+    uint32_t start_node = 0x800000;
+    // Total heap area: 16MB. 
+    // The data size of the first block is 16MB minus its own header.
+    uint32_t total_heap_size = 16 * 1024 * 1024; 
 
     heap_start = (header_t*)start_node;
-    heap_start->size = 16 * 1024 * 1024; // 16MB
+    heap_start->size = total_heap_size - sizeof(header_t); 
     heap_start->is_free = 1;
     heap_start->next = NULL;
-
-    // kprintf might fail if VESA isn't up, but let's keep it for serial debug
-    // kprintf("Heap safely started at 0x%x\n", start_node);
 }
-
-
 void kfree(void* ptr) {
     if (!ptr) return;
 
-    // 1. Find the header
-    header_t* header = (header_t*)((uint32_t)ptr - sizeof(header_t));
-    header->is_free = 1;
+    header_t* curr = heap_start;
+    header_t* prev = NULL;
+    header_t* target = NULL;
+    header_t* prev_save = NULL;
 
-    // 2. Coalesce (Merge with next block if it is also free)
-    if (header->next && header->next->is_free) {
-        // Add the size of the next block + its header to this block
-        header->size += sizeof(header_t) + header->next->size;
-        // Skip the next block in the list
-        header->next = header->next->next;
+    // 1. SEARCH: Find the actual header managing this pointer
+    // This handles aligned pointers from kmalloc_a safely
+    while (curr) {
+        uint32_t data_start = (uint32_t)curr + sizeof(header_t);
+        uint32_t data_end = data_start + curr->size;
+
+        if ((uint32_t)ptr >= data_start && (uint32_t)ptr < data_end) {
+            target = curr;
+            prev_save = prev;
+            break;
+        }
+        prev = curr;
+        curr = curr->next;
     }
 
-    // Note: To be perfect, we should also merge with the PREVIOUS block, 
-    // but that requires a "doubly linked list." For now, this helps a lot!
+    if (!target) return; // Pointer not found in heap
+
+    // 2. MARK AS FREE
+    target->is_free = 1;
+
+    // 3. COALESCE FORWARD: Merge with next if free
+    if (target->next && target->next->is_free) {
+        target->size += sizeof(header_t) + target->next->size;
+        target->next = target->next->next;
+    }
+
+    // 4. COALESCE BACKWARD: Merge with previous if free
+    // This is the "magic" that turns tiny holes back into 13MB
+    if (prev_save && prev_save->is_free) {
+        prev_save->size += sizeof(header_t) + target->size;
+        prev_save->next = target->next;
+    }
 }
+
+
 
 void* kmemcpy(void* dest, const void* src, uint32_t n) {
     __asm__ volatile (
@@ -69,8 +90,7 @@ void kheap_stats() {
     uint32_t blocks = 0;
     
     header_t* curr = heap_start;
-    uint32_t heap_limit = (uint32_t)heap_start + 0x100000; // 1MB limit
-
+    uint32_t heap_limit = (uint32_t)heap_start + 16 * 1024 * 1024; // 1MB limit
     kprintf("Scanning Heap at 0x%x...\n", (uint32_t)heap_start);
 
     while (curr != NULL) {
@@ -103,37 +123,56 @@ void kheap_stats() {
 }
 
 void* kmalloc(uint32_t size) {
+    if (size == 0) return NULL;
+
+    // 1. ALIGNMENT: 4-byte boundaries are non-negotiable for heap stability
+    size = (size + 3) & ~3;
+
     header_t* curr = heap_start;
 
     while (curr) {
         if (curr->is_free && curr->size >= size) {
             
-            // --- THE FIX: Only split if there is REAL room ---
-            // You need: Requested Size + Header Size + at least 4 bytes of data
-            uint32_t needed_for_split = size + sizeof(header_t) + 4;
+            // 2. THE HEALER SPLIT LOGIC
+            // We only split if we have enough room for:
+            // The requested data + current header + NEW header + at least 16 bytes of data.
+            // If the leftover is less than 16 bytes, we don't split; we just 
+            // give the user a slightly larger block to avoid "0-size" ghosts.
+            uint32_t total_needed_to_split = size + sizeof(header_t) + 16;
 
-            if (curr->size >= needed_for_split) {
-                // Calculate position of the new header
+            if (curr->size >= total_needed_to_split) {
+                // Calculate exactly where the NEW header will live
                 header_t* next_block = (header_t*)((uint32_t)curr + sizeof(header_t) + size);
                 
-                // Calculate remaining size safely
+                // The remainder is the current size minus what we took and the new header
                 next_block->size = curr->size - size - sizeof(header_t);
                 next_block->is_free = 1;
+                
+                // Link the new block to whatever the current block was pointing to
                 next_block->next = curr->next;
 
+                // Shrink the current block to the exact size requested
                 curr->size = size;
+                
+                // Point current to the new block, effectively inserting it into the list
                 curr->next = next_block;
+            } else {
+                // INTERNAL FRAGMENTATION:
+                // We don't split. curr->size remains larger than requested,
+                // which is fine! It prevents "B3 size 0" from ever existing.
             }
-            // If it's not big enough to split, we just take the whole block
-            // and DON'T subtract the header size from the data size.
-
+            
+            // 3. LOCK AND RETURN
             curr->is_free = 0;
             return (void*)((uint32_t)curr + sizeof(header_t));
         }
+        
         curr = curr->next;
     }
-    return NULL;
+
+    return NULL; // Truly out of memory
 }
+
 void* kmalloc_a(uint32_t size) {
     // 1. We allocate enough extra space to find an aligned spot 
     // without ever moving the actual header.
@@ -159,4 +198,33 @@ void* kmemset(void* dest, uint32_t val, uint32_t n) {
         : "memory"
     );
     return dest;
+}
+void kheap_dump_map() {
+    header_t* curr = heap_start;
+    int i = 0;
+    uint32_t total_calculated = 0;
+
+    kprintf_unsync("\n--- HEAP MAP DEBUG ---\n");
+    while (curr) {
+        uint32_t data_start = (uint32_t)curr + sizeof(header_t);
+        
+        kprintf_unsync("B%d: [%s] Addr: 0x%x | Data: 0x%x | Size: %d | Next: 0x%x\n", 
+            i++, 
+            curr->is_free ? "FREE" : "USED", 
+            (uint32_t)curr, 
+            data_start, 
+            curr->size, 
+            (uint32_t)curr->next
+        );
+
+        total_calculated += sizeof(header_t) + curr->size;
+
+        if (i > 20) { // Safety break
+            kprintf_unsync("... stopping dump after 20 blocks ...\n");
+            break;
+        }
+        curr = curr->next;
+    }
+    kprintf_unsync("Total Heap Coverage: %d bytes\n", total_calculated);
+    kprintf_unsync("----------------------\n");
 }

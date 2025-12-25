@@ -1,7 +1,7 @@
 #include "fs.h"
 #include "kheap.h"
 #include "lib.h"
-
+#include "fat.h"
 file_entry_t files[MAX_FILES];
 
 unsigned char spinner_code[] = {
@@ -75,8 +75,13 @@ void init_fs() {
     for(int i = 0; i < MAX_FILES; i++) {
         files[i].active = 0;
     }
-  kcreate_file_bin("clock.bin", clock_code, sizeof(clock_code));
-  kcreate_file_bin("spinner.bin", spinner_code, sizeof(spinner_code));
+    fat_touch("SPINNER.BIN");
+    fat_write_file_raw("SPINNER.BIN", (const uint8_t*)spinner_code, sizeof(spinner_code));
+    kprintf_color(0x00FF00, "SPINNER.BIN created successfully!\n");
+    
+    fat_touch("CLOCK.BIN");
+    fat_write_file_raw("CLOCK.BIN", (const uint8_t*)clock_code, sizeof(clock_code));
+    kprintf_color(0x00FF00, "CLOCK.BIN created successfully!\n");
 }
 int kcreate_file_bin(char* name, unsigned char* data, uint32_t size) {
     for (int i = 0; i < MAX_FILES; i++) {

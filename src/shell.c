@@ -9,6 +9,7 @@
 #include "kheap.h" 
 #include "idt.h"
 #include "fat.h"
+
 extern int vesa_updating;
 extern uint32_t system_ticks;
 extern uint32_t total_pages;
@@ -63,7 +64,52 @@ else if (kstrcmp(input, "CAT") == 0) {
         }
     }
 }
+else if (kstrcmp(input, "RUN_TEST") == 0) {
+    // The raw bytes of the spinner program
+    uint8_t test_code[] = {
+        0xB8, 0x02, 0x00, 0x00, 0x00, 0xCD, 0x80, 0xC1, 0xE8, 0x05,
+        0x83, 0xE0, 0x03, 0xBB, 0x2D, 0x5C, 0x7C, 0x2F, 0x88, 0xC1,
+        0xC1, 0xE1, 0x03, 0xD3, 0xEB, 0x81, 0xE3, 0xFF, 0x00, 0x00,
+        0x00, 0xB8, 0x01, 0x00, 0x00, 0x00, 0xB9, 0xE8, 0x03, 0x00,
+        0x00, 0xBA, 0x05, 0x00, 0x00, 0x00, 0xCD, 0x80, 0xB8, 0x03,
+        0x00, 0x00, 0x00, 0xBB, 0x01, 0x00, 0x00, 0x00, 0xCD, 0x80,
+        0xEB, 0xC4
+    };
 
+    kprintf_color(0xFFFF00, "Starting RUN_TEST (Bypassing FAT)...\n");
+
+    // 1. Allocate raw memory
+    uint32_t code_size = sizeof(test_code);
+    void* raw_mem = kmalloc(code_size + 8192); // Extra room for alignment
+    
+    if (!raw_mem) {
+        kprintf_color(0xFF0000, "RUN_TEST: kmalloc failed!\n");
+        return;
+    }
+
+    // 2. Calculate Page Alignment (Same logic as RUN)
+    uint32_t raw_addr = (uint32_t)raw_mem;
+    uint32_t aligned_exec;
+    if ((raw_addr & 0xFFF) == 0) {
+        aligned_exec = raw_addr;
+    } else {
+        aligned_exec = (raw_addr + 0x1000) & 0xFFFFF000;
+    }
+
+    kprintf("Allocated: 0x%x, Aligned Entry: 0x%x\n", raw_addr, aligned_exec);
+
+    // 3. Copy hardcoded code to the execution area
+    kmemcpy((void*)aligned_exec, test_code, code_size);
+
+    // 4. Spawn the task
+    int tid = spawn_task((void(*)())aligned_exec, raw_mem, "TEST_SPIN");
+
+    if (tid != -1) {
+        kprintf_color(0x00FF00, "Task spawned successfully. TID: %d\n", tid);
+    } else {
+        kprintf_color(0xFF0000, "spawn_task failed!\n");
+    }
+}
 else if (kstrcmp(input, "MKDIR") == 0) {
     if (arg) {
         fat_mkdir(arg);
@@ -108,38 +154,36 @@ else if (kstrcmp(input, "SET_FPS") == 0) {
             kprintf_unsync("Usage: SLEEP [ms]\n");
         }
     }
-    else if (kstrcmp(input, "RUN") == 0) {
+
+
+
+else if (kstrcmp(input, "RUN") == 0) {
         if (arg) {
-            int idx = -1;
-            for (int i = 0; i < MAX_FILES; i++) {
-                if (fs_is_active(i) && kstrcmp(fs_get_name(i), arg) == 0) {
-                    idx = i;
-                    break;
-                }
-            }
-            if (idx != -1) {
-                char* file_data = fs_get_data(arg);
-                uint32_t size = fs_get_size(idx);
+              struct fat_dir_entry* entry = fat_search(arg);
+                uint32_t size = entry->size;
+                char* file_data = fat_load_file(entry);
                 void* raw_code = kmalloc(size + 4096);
                 if (!raw_code) {
                     kprintf_unsync("Memory allocation failed\n");
                 } else {
                     uint32_t aligned_code = ((uint32_t)raw_code + 0xFFF) & 0xFFFFF000;
                     kmemcpy((void*)aligned_code, file_data, size);
+                    kfree(file_data); 
                     int tid = spawn_task((void(*)())aligned_code, raw_code, arg);
                     kprintf_unsync("Spawned %s (TID: %d, Entry: 0x%x)\n", arg, tid, aligned_code);
                 }
-            } else {
-                kprintf_unsync("File not found: %s\n", arg);
-            }
         }
-    }
-    else if (kstrcmp(input, "TEST_MALLOC") == 0) {
+}
+
+  else if (kstrcmp(input, "TEST_MALLOC") == 0) {
+        kheap_dump_map();
         kprintf_unsync("Allocating 100KB...\n");
         void* p = kmalloc(102400); 
+        kheap_dump_map();
         kheap_stats();
         kprintf_unsync("Freeing 100KB...\n");
         kfree(p);
+        kheap_dump_map();
         kheap_stats();
     }
     else if (kstrcmp(input, "HEXDUMP") == 0) {

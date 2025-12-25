@@ -71,4 +71,5 @@ void fat_print_path_recursive(uint16_t cluster);
 void fat_ls_cluster(uint32_t cluster);
 struct fat_dir_entry* fat_search_in(const char* filename, uint32_t start_cluster);
 uint32_t fat_get_cluster_from_path(const char* path);
+void fat_write_file_raw(const char* filename, const uint8_t* data, uint32_t size);
 #endif // !FAT_H

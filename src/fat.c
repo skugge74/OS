@@ -12,6 +12,8 @@ static uint32_t root_dir_sectors;
 static uint32_t first_data_sector;
 static uint32_t first_fat_sector;
 static uint32_t current_dir_cluster = 0; // 0 means Root Directory
+static uint8_t global_fat_buf[512] __attribute__((aligned(16)));
+static uint8_t raw_io_buffer[512] __attribute__((aligned(16)));
 
 int fat_compare_name(const char* input, char* fat_name, char* fat_ext) {
     // 1. HARD MATCH for "." and ".."
@@ -66,6 +68,10 @@ void fat_init() {
     first_fat_sector = bpb.reserved_sector_count;
     uint32_t first_root_dir_sector = first_fat_sector + (bpb.num_fats * bpb.fat_size_16);
     first_data_sector = first_root_dir_sector + root_dir_sectors;
+header_t* tail = (header_t*)0xB00218; // The address of your B2
+tail->size = (16 * 1024 * 1024) - ((uint32_t)tail - 0x800000) - sizeof(header_t);
+tail->is_free = 1;
+tail->next = NULL;
 }
 
 // Helper to convert Cluster to LBA
@@ -83,21 +89,33 @@ uint16_t fat_get_next_cluster(uint16_t cluster) {
 }
 
 void* fat_load_file(struct fat_dir_entry* entry) {
-    uint32_t size = entry->size;
-    uint8_t* buffer = kmalloc(size);
-    uint16_t cluster = entry->first_cluster_low;
-    uint32_t bytes_read = 0;
+    if (entry->size == 0) return NULL;
 
-    while (cluster < 0xFFF8) { // Standard FAT16 End-of-Chain
+    // ALWAYS allocate multiples of 512 for IDE safety
+    uint32_t alloc_size = ((entry->size + 511) / 512) * 512 + 32;
+    uint8_t* buffer = kmalloc(alloc_size);
+    
+    if (!buffer) return NULL;
+
+    uint16_t cluster = entry->first_cluster_low;
+    uint32_t total_sectors = (entry->size + 511) / 512;
+    uint32_t sectors_read = 0;
+
+    while (cluster != 0 && cluster < 0xFFF8 && (sectors_read < total_sectors)) {
         uint32_t lba = cluster_to_lba(cluster);
+        
         for (int i = 0; i < bpb.sectors_per_cluster; i++) {
-            ide_read_sector(lba + i, buffer + bytes_read);
-            bytes_read += 512;
-            if (bytes_read >= size) return buffer;
+            // Read into the buffer with proper sector offsets
+            ide_read_sector(lba + i, buffer + (sectors_read * 512));
+            sectors_read++;
+            
+            if (sectors_read >= total_sectors) {
+                return (void*)buffer; 
+            }
         }
         cluster = fat_get_next_cluster(cluster);
     }
-    return buffer;
+    return (void*)buffer;
 }
 
 struct fat_dir_entry* fat_search(const char* filename) {
@@ -145,7 +163,7 @@ void fat_cd(const char* path) {
     }
 }
 
-void fat_ls() {
+/*void fat_ls() {
     uint8_t buffer[512];
     uint32_t dir_lba = get_current_dir_lba();
     ide_read_sector(dir_lba, buffer);
@@ -184,7 +202,6 @@ void fat_ls() {
     }
     VESA_flip();
 }
-
 void fat_ls_cluster(uint32_t cluster) {
     uint8_t buffer[512];
     uint32_t dir_lba;
@@ -215,8 +232,115 @@ void fat_ls_cluster(uint32_t cluster) {
         kprintf_unsync("  %d bytes\n", entry[i].size);
     }
     VESA_flip();
+}*/
+
+void fat_ls() {
+    uint8_t buffer[512];
+    uint32_t dir_lba = get_current_dir_lba();
+    ide_read_sector(dir_lba, buffer);
+
+    struct fat_dir_entry* entry = (struct fat_dir_entry*)buffer;
+    
+    // Header in a neutral color (e.g., Gray or Yellow)
+    kprintf_color(0xAAAAAA, "Type   Name             Size\n");
+    kprintf_color(0xAAAAAA, "----------------------------\n");
+
+    for (int i = 0; i < 16; i++) {
+        if (entry[i].name[0] == 0x00) break;
+        if ((unsigned char)entry[i].name[0] == 0xE5) continue;
+        if (entry[i].attr == 0x0F) continue; 
+
+        // 1. Determine Color and Type Prefix
+        uint32_t color;
+        if (entry[i].attr & 0x10) {
+            color = 0x00FFFF; // Cyan for Directories
+            kprintf_color(color, "[DIR]  ");
+        } else {
+            color = 0xFFFFFF; // White for Files
+            kprintf_color(color, "       ");
+        }
+
+        // 2. Print Name (using the specific color)
+        for (int n = 0; n < 8; n++) {
+            if (entry[i].name[n] != ' ') {
+                // Assuming you have a kputc_color or similar, 
+                // otherwise we use kprintf_color with %c
+                kprintf_color(color, "%c", entry[i].name[n]);
+            }
+        }
+
+        // 3. Smart Conditional Dot
+        int is_dot_entry = (entry[i].name[0] == '.');
+        if (!is_dot_entry) {
+            if (entry[i].ext[0] != ' ' || entry[i].ext[1] != ' ' || entry[i].ext[2] != ' ') {
+                kprintf_color(color, ".");
+                for (int e = 0; e < 3; e++) {
+                    if (entry[i].ext[e] != ' ') kprintf_color(color, "%c", entry[i].ext[e]);
+                }
+            }
+        }
+
+        // 4. Print Size (back to neutral color to keep the focus on names)
+        kprintf_color(0x888888, "  %d bytes\n", entry[i].size);
+    }
+    VESA_flip();
 }
 
+
+void fat_ls_cluster(uint32_t cluster) {
+    uint8_t buffer[512];
+    uint32_t dir_lba;
+
+    // 1. Determine LBA based on the cluster passed in
+    if (cluster == 0) {
+        dir_lba = first_fat_sector + (bpb.num_fats * bpb.fat_size_16);
+    } else {
+        dir_lba = cluster_to_lba(cluster);
+    }
+
+    ide_read_sector(dir_lba, buffer);
+    struct fat_dir_entry* entry = (struct fat_dir_entry*)buffer;
+    
+    kprintf_color(0xAAAAAA, "Directory Listing (Cluster %d):\n", cluster);
+
+    for (int i = 0; i < 16; i++) {
+        if (entry[i].name[0] == 0x00) break;
+        if ((unsigned char)entry[i].name[0] == 0xE5) continue;
+        if (entry[i].attr == 0x0F) continue; // Skip LFN
+
+        uint32_t entry_color;
+        
+        // 2. Set Color and Prefix based on Attribute
+        if (entry[i].attr & 0x10) {
+            entry_color = 0x00FFFF; // Cyan for Directories
+            kprintf_color(entry_color, "- ");
+        } else {
+            entry_color = 0xFFFFFF; // White for Files
+            kprintf_color(entry_color, "- ");
+        }
+
+        // 3. Print the name using the entry color
+        // Note: I'm inlining the print logic so it uses entry_color correctly
+        for (int n = 0; n < 8; n++) {
+            if (entry[i].name[n] != ' ') kprintf_color(entry_color, "%c", entry[i].name[n]);
+        }
+
+        // 4. Dot and Extension logic (Skip dot for '.' and '..')
+        if (entry[i].name[0] != '.') {
+            if (entry[i].ext[0] != ' ' || entry[i].ext[1] != ' ' || entry[i].ext[2] != ' ') {
+                kprintf_color(entry_color, ".");
+                for (int e = 0; e < 3; e++) {
+                    if (entry[i].ext[e] != ' ') kprintf_color(entry_color, "%c", entry[i].ext[e]);
+                }
+            }
+        }
+
+        // 5. Print size in a dimmer color (Dark Gray)
+        kprintf_color(0x555555, "  %d bytes\n", entry[i].size);
+    }
+    
+    VESA_flip();
+}
 uint32_t fat_get_current_cluster() {
     return current_dir_cluster;
 }
@@ -302,7 +426,7 @@ void ide_write_sector(uint32_t lba, uint8_t* buffer) {
     }
 
     // 4. Flush the write (Important for some emulators)
-    outb(0x1F7, 0xE7); // Cache Flush command
+    //outb(0x1F7, 0xE7); // Cache Flush command
     while (inb(0x1F7) & 0x80);
 }
 
@@ -487,13 +611,21 @@ void fat_hexdump_file(const char* filename) {
         kprintf_unsync("HEXDUMP Error: Failed to load file.\n");
     }
 }
+
+
 void fat_write_file(const char* filename, const char* data) {
-    uint8_t* sector_buffer = (uint8_t*)kmalloc(512);
+    if (!filename || !data) return;
+
+    // 1. Calculate length manually
+    uint32_t len = 0;
+    while(data[len] != '\0' && len < 512) len++;
+    kprintf("DEBUG: Data length to write: %d\n", len);
+
+    // 2. Find the entry (We need to keep the LBA and index)
     uint32_t dir_lba = get_current_dir_lba();
+    ide_read_sector(dir_lba, global_fat_buf);
     
-    // 1. Find the file's directory entry
-    ide_read_sector(dir_lba, sector_buffer);
-    struct fat_dir_entry* entries = (struct fat_dir_entry*)sector_buffer;
+    struct fat_dir_entry* entries = (struct fat_dir_entry*)global_fat_buf;
     int slot = -1;
 
     for (int i = 0; i < 16; i++) {
@@ -504,48 +636,41 @@ void fat_write_file(const char* filename, const char* data) {
     }
 
     if (slot == -1) {
-        kprintf("WRITE Error: File not found.\n");
-        kfree(sector_buffer);
+        kprintf("DEBUG: File %s not found in LBA %x\n", filename, dir_lba);
         return;
     }
 
-    // --- SAFETY CHECK: ONLY 0-BYTE FILES ---
-    if (entries[slot].size > 0 || entries[slot].first_cluster_low != 0) {
-        kprintf("WRITE Error: File is not empty. This version only supports new files.\n");
-        kfree(sector_buffer);
-        return;
+    // 3. Get or Allocate a Cluster
+    uint16_t cluster = entries[slot].first_cluster_low;
+    if (cluster == 0) {
+        cluster = fat_find_free_cluster();
+        if (cluster == 0xFFFF) { kprintf("DEBUG: Disk Full\n"); return; }
+        fat_update_table(cluster, 0xFFFF);
+        entries[slot].first_cluster_low = cluster;
+        //kprintf("DEBUG: Allocated new cluster: %d\n", cluster);
     }
 
-    // 2. Allocation: Find a free cluster for this new file
-    uint16_t cluster = fat_find_free_cluster();
-    if (cluster == 0xFFFF) {
-        kprintf("WRITE Error: Disk Full.\n");
-        kfree(sector_buffer);
-        return;
-    }
-
-    // 3. Update FAT Table: Mark cluster as End-of-Chain (0xFFFF)
-    fat_update_table(cluster, 0xFFFF);
-
-    // 4. Update Directory Entry: Set cluster and size
-    uint32_t data_len = kstrlen(data);
-    if (data_len > 511) data_len = 511; // Cap at one sector for now
-
-    entries[slot].first_cluster_low = cluster;
-    entries[slot].size = data_len;
+    // 4. Update the Directory Entry SIZE in our buffer
+    entries[slot].size = len;
     
-    // Save updated directory back to disk
-    ide_write_sector(dir_lba, sector_buffer);
+    // 5. STEP ONE: Write the Directory Entry back to disk
+    // If you skip this, 'ls' will always show 0 bytes!
+    ide_write_sector(dir_lba, global_fat_buf);
+    //kprintf("DEBUG: Directory entry updated at LBA %x\n", dir_lba);
 
-    // 5. Write the actual data to the new cluster
-    kmemset(sector_buffer, 0, 512);
-    kmemcpy(sector_buffer, data, data_len);
-    ide_write_sector(cluster_to_lba(cluster), sector_buffer);
+    // 6. STEP TWO: Write the Data to the File Cluster
+    // We clear the buffer first
+    kmemset(global_fat_buf, 0, 512 / 4);
+    kmemcpy(global_fat_buf, data, len);
 
-    kprintf("Successfully wrote %d bytes to %s\n", data_len, filename);
+    uint32_t data_lba = cluster_to_lba(cluster);
+    ide_write_sector(data_lba, global_fat_buf);
+    //kprintf("DEBUG: Data written to LBA %x\n", data_lba);
 
-    kfree(sector_buffer);
+    kprintf("DONE: Wrote '%s' to %s\n", data, filename);
 }
+
+
 void fat_rm(const char* filename) {
     uint8_t buffer[512];
     uint32_t dir_lba = get_current_dir_lba();
@@ -713,4 +838,59 @@ uint32_t fat_get_cluster_from_path(const char* path) {
         }
     }
     return walk_cluster;
+}
+
+void fat_write_file_raw(const char* filename, const uint8_t* data, uint32_t size) {
+    if (!filename || !data || size == 0) return;
+
+    // 1. Find the Directory Entry
+    uint32_t dir_lba = get_current_dir_lba();
+    ide_read_sector(dir_lba, raw_io_buffer);
+    
+    struct fat_dir_entry* entries = (struct fat_dir_entry*)raw_io_buffer;
+    int slot = -1;
+
+    for (int i = 0; i < 16; i++) {
+        if (fat_compare_name(filename, (char*)entries[i].name, (char*)entries[i].ext)) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot == -1) {
+        kprintf_color(0xFF0000, "RAW Error: File %s not found.\n", filename);
+        return;
+    }
+
+    // 2. Handle Cluster Allocation
+    uint16_t cluster = entries[slot].first_cluster_low;
+    if (cluster == 0) {
+        cluster = fat_find_free_cluster();
+        if (cluster == 0xFFFF) {
+            kprintf_color(0xFF0000, "Disk Full\n");
+            return;
+        }
+        fat_update_table(cluster, 0xFFFF);
+        entries[slot].first_cluster_low = cluster;
+    }
+
+    // 3. Update Directory Entry SIZE and Cluster
+    entries[slot].size = size;
+    
+    // Save Directory back to disk immediately
+    ide_write_sector(dir_lba, raw_io_buffer);
+
+    // 4. Prepare Data Buffer
+    // We clear the buffer and then copy the binary data
+    kmemset(raw_io_buffer, 0, 512 / 4);
+    
+    // Safety check: Binary files must be <= 512 bytes for this single-sector version
+    uint32_t bytes_to_copy = (size > 512) ? 512 : size;
+    kmemcpy(raw_io_buffer, data, bytes_to_copy);
+
+    // 5. Write Data to Cluster
+    uint32_t data_lba = cluster_to_lba(cluster);
+    ide_write_sector(data_lba, raw_io_buffer);
+
+    kprintf_color(0x00FF00, "Successfully wrote RAW %d bytes to %s\n", bytes_to_copy, filename);
 }
