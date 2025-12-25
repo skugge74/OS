@@ -4,8 +4,8 @@
 // A page directory entry
 uint32_t page_directory[1024] __attribute__((aligned(4096)));
 uint32_t vesa_page_tables[2][1024] __attribute__((aligned(4096)));
-// We define 4 page tables to cover 16MB of RAM (4MB per table)
-uint32_t kernel_page_tables[4][1024] __attribute__((aligned(4096)));
+// We define 4 page tables to cover 16MB of RAM (8MB per table)
+uint32_t kernel_page_tables[8][1024] __attribute__((aligned(4096)));
 
 extern void load_page_directory(unsigned int*);
 extern void enable_paging();
@@ -40,41 +40,42 @@ void flush_tlb() {
 void paging_init(struct multiboot_info* mbi) {
     // 1. Clear Page Directory
     for(int i = 0; i < 1024; i++) {
-        page_directory[i] = 0x00000002; 
+        page_directory[i] = 0x00000002; // Not present, writable
     }
 
-    // 2. Identity Map the first 16MB (Kernel, Stack, GDT, IDT, and MBI)
-    for (int t = 0; t < 4; t++) {
+    // 2. Identity Map the first 32MB (Increased from 16MB)
+    // This ensures your Heap has plenty of mapped physical RAM.
+    for (int t = 0; t < 8; t++) { // 8 tables * 4MB = 32MB
         for (int i = 0; i < 1024; i++) {
             uint32_t phys = (t * 4 * 1024 * 1024) + (i * 4096);
-            kernel_page_tables[t][i] = phys | 3; 
+            kernel_page_tables[t][i] = phys | 3; // Present + Writable
         }
         page_directory[t] = ((uint32_t)kernel_page_tables[t]) | 3;
     }
 
-    // 3. Identity Map the VESA Framebuffer
+    // 3. Identity Map the VESA Framebuffer (Hardware VRAM)
     uint32_t fb_phys = (uint32_t)mbi->framebuffer_addr;
     uint32_t dir_idx_start = fb_phys >> 22;
     
+    // Map exactly what we need (2 tables = 8MB coverage)
     for (int t = 0; t < 2; t++) {
         for (int i = 0; i < 1024; i++) {
-            // Ensure we are mapping the actual physical pages of the FB
-            uint32_t phys = fb_phys + (t * 1024 * 4096) + (i * 4096);
-            vesa_page_tables[t][i] = (phys & ~0xFFF) | 3;
+            // FIX: Use 4096 as the increment, not a 4MB jump inside the table loop
+            uint32_t phys_offset = (t * 1024 * 4096) + (i * 4096);
+            uint32_t actual_phys = fb_phys + phys_offset;
+            vesa_page_tables[t][i] = (actual_phys & ~0xFFF) | 3;
         }
         
-        // Map the table into the directory
         if ((dir_idx_start + t) < 1024) {
             page_directory[dir_idx_start + t] = ((uint32_t)vesa_page_tables[t]) | 3;
         }
     }
-
     // 4. Load and Enable
     load_page_directory(page_directory);
     enable_paging();
 
-    // If interrupts were off, turn them back on so the timer works!
     __asm__ volatile("sti"); 
 
-    VESA_print("Paging enabled. Timer should resume...\n", 0x00FF00);
+    // Use VESA_print sparingly here, as the backbuffer might not be ready yet
 }
+

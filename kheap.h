@@ -15,5 +15,8 @@ void* kmalloc(uint32_t size);
 void* kmalloc_a(uint32_t size); 
 void kfree(void* ptr);
 void* kmemcpy(void* dest, const void* src, uint32_t n);
+void* kmemcpy32(void* dest, const void* src, uint32_t n);
+void* kmemset(void* dest, uint32_t val, uint32_t n);
 void kheap_stats();
+void* kmemset(void* dest, uint32_t val, uint32_t n);
 #endif // !KHEAP

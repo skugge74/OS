@@ -54,6 +54,52 @@ size_t kstrlen(const char* str) {
     while (str[len]) len++;
     return len;
 }
+void kprintf_unsync(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    for (int i = 0; format[i] != '\0'; i++) {
+        if (format[i] == '%') {
+            i++;
+            switch (format[i]) {
+                case 'c': {
+                    char c = (char)va_arg(args, int);
+                    char str[2] = {c, '\0'};
+                    VESA_print_unsync(str, COLOR_WHITE);
+                    break;
+                }
+                case 's': {
+                    char* s = va_arg(args, char*);
+                    VESA_print_unsync(s, COLOR_WHITE);
+                    break;
+                }
+                case 'd': {
+                    int d = va_arg(args, int);
+                    char buf[32];
+                    itoa(d, buf, 10);
+                    VESA_print_unsync(buf, COLOR_WHITE);
+                    break;
+                }
+                case 'x': {
+                    int x = va_arg(args, int);
+                    char buf[32];
+                    itoa(x, buf, 16);
+                    VESA_print_unsync(buf, COLOR_WHITE);
+                    break;
+                }
+                default:
+                    VESA_print_unsync("%", COLOR_WHITE);
+                    break;
+            }
+        } else {
+            char str[2] = {format[i], '\0'};
+            VESA_print_unsync(str, COLOR_WHITE);
+        }
+    }
+    va_end(args);
+}
+
+
 
 void kprintf(const char* format, ...) {
     va_list args;

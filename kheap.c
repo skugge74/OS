@@ -6,20 +6,20 @@ extern uint32_t end;
 uint32_t placement_address = (uint32_t)&end;
 
 header_t* heap_start = NULL;
-
 void init_kheap() {
-    // Move the heap to 4MB. This is usually safe from kernel and multiboot data.
-    // 0x400000 = 4MB
-    uint32_t start_node = 0x400000; 
+    uint32_t start_node = 0x800000; 
+
+    // CRITICAL: Zero out the memory where the header will live
+    // If there is old data here, kmalloc will think the list is corrupted
+    kmemset((void*)start_node, 0, sizeof(header_t) / 4); 
 
     heap_start = (header_t*)start_node;
-    
-    // Set the initial block to 1MB
-    heap_start->size = 1048576; 
+    heap_start->size = 16 * 1024 * 1024; // 16MB
     heap_start->is_free = 1;
     heap_start->next = NULL;
 
-    kprintf("Heap safely started at 0x%x\n", start_node);
+    // kprintf might fail if VESA isn't up, but let's keep it for serial debug
+    // kprintf("Heap safely started at 0x%x\n", start_node);
 }
 
 
@@ -54,7 +54,15 @@ void* kmemcpy(void* dest, const void* src, uint32_t n) {
     );
     return dest;
 }
-
+// Use this for Graphics (VESA_flip, VESA_scroll)
+void* kmemcpy32(void* dest, const void* src, uint32_t n) {
+    __asm__ volatile (
+        "rep movsl"
+        : "+D"(dest), "+S"(src), "+c"(n)
+        : : "memory"
+    );
+    return dest;
+}
 void kheap_stats() {
     uint32_t free_mem = 0; 
     uint32_t used_mem = 0;
@@ -142,4 +150,13 @@ void* kmalloc_a(uint32_t size) {
     uint32_t aligned_addr = (addr + 0xFFF) & 0xFFFFF000;
     
     return (void*)aligned_addr;
+}
+void* kmemset(void* dest, uint32_t val, uint32_t n) {
+    __asm__ volatile (
+        "rep stosl"
+        : "+D"(dest), "+c"(n)
+        : "a"(val)
+        : "memory"
+    );
+    return dest;
 }

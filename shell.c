@@ -12,6 +12,7 @@
 extern uint32_t system_ticks;
 extern uint32_t total_pages;
 extern uint32_t timer_frequency;        // Add this!
+extern uint32_t target_fps;
 // Helper to find arguments
 char* find_space(char* str) {
     while (*str) {
@@ -34,273 +35,196 @@ void dummy_app() {
         vga[0]++; 
     }
 }
+
 void execute_command(char* input) {
-    //kprintf("DEBUG: You typed [%s]\n", input);
     char* arg = find_space(input);
     if (arg) {
-        *arg = '\0'; // Null-terminate the command part
-        arg++;       // Move pointer to the start of the argument
+        *arg = '\0'; 
+        arg++;       
     }
+    int start_y = vesa_cursor_y;
 
     if (kstrcmp(input, "HELP") == 0) {
-        kprintf("Commands: HELP, ECHO, RUN <filename>,  REBOOT, CRASH\n");
+        kprintf_unsync("Commands: HELP, ECHO, RUN, REBOOT, CRASH, STAT, LS, PS, TOP, CLEAR\n");
     }
-else if (kstrcmp(input, "ECHO") == 0) {
-      if (arg) kprintf("%s\n", arg);
-      else kprintf("Usage: ECHO <text>\n");
-    }
-
-else if (kstrcmp(input, "STAT") == 0) {
-      kheap_stats();  
-  }
-
-else if (kstrcmp(input, "SLEEP") == 0) {
+else if (kstrcmp(input, "SET_FPS") == 0) {
     if (arg) {
-        int ms = katoi(arg); // Convert "1000" string to integer
-        if (ms > 0) {
-            kprintf("Shell sleeping for %d ms...\n", ms);
-            sleep(ms); // This calls your new Syscall 3
-            kprintf("Shell awake.\n");
-        }
-    } else {
-        kprintf("Usage: SLEEP [ms]\n");
+        target_fps = katoi(arg);
+        kprintf_unsync("FPS set to %d\n", target_fps);
     }
 }
-else if (kstrcmp(input, "RUN") == 0) {
-    if (arg) {
-        int idx = -1;
-        for (int i = 0; i < MAX_FILES; i++) {
-            if (fs_is_active(i) && kstrcmp(fs_get_name(i), arg) == 0) {
-                idx = i;
-                break;
-            }
-        }
-
-        if (idx != -1) {
-            char* file_data = fs_get_data(arg);
-            uint32_t size = fs_get_size(idx);
-
-            // 1. Allocate enough room to find an aligned boundary
-            // We request size + 4KB to guarantee we can align to 4KB
-            void* raw_code = kmalloc(size + 4096);
-            if (!raw_code) {
-                kprintf("Memory allocation failed\n");
-                return;
-            }
-
-            // 2. Find the aligned address MANUALLY
-            // We do NOT use kmalloc_a here because it breaks the header list
-            uint32_t aligned_code = ((uint32_t)raw_code + 0xFFF) & 0xFFFFF000;
-
-            // 3. Copy the binary to the ALIGNED address
-            kmemcpy((void*)aligned_code, file_data, size);
-
-            // 4. Spawn the task
-            // IMPORTANT: Pass aligned_code as the entry point, 
-            // but keep raw_code as the reference for kfree later!
-            int tid = spawn_task((void(*)())aligned_code, raw_code, arg);
-            
-            kprintf("Spawned %s (TID: %d, Entry: 0x%x)\n", arg, tid, aligned_code);
-        } else {
-            kprintf("File not found: %s\n", arg);
-        }
+    else if (kstrcmp(input, "TIMER") == 0){
+    // We pass 0 for 'raw_code' because it's a kernel-space function, not an loaded file.
+    int tid = spawn_task(task_timer, 0, "timer");
+    kprintf_unsync("Timer task spawned (TID: %d)\n", tid);
     }
-}
-
-  else if (kstrcmp(input, "TEST_MALLOC") == 0) {
-    kprintf("Allocating 100KB...\n");
-    void* p = kmalloc(102400); 
-    kheap_stats();
-    
-    kprintf("Freeing 100KB...\n");
-    kfree(p);
-    kheap_stats();
-}
-else if (kstrcmp(input, "HEXDUMP") == 0) {
-    if (arg) {
-        // 1. Find the file index first to get the size
-        int found_idx = -1;
-        for (int i = 0; i < MAX_FILES; i++) {
-            if (fs_is_active(i) && kstrcmp(fs_get_name(i), arg) == 0) {
-                found_idx = i;
-                break;
-            }
-        }
-
-        if (found_idx != -1) {
-            char* data = fs_get_data(arg);
-            uint32_t size = fs_get_size(found_idx);
-            kprintf("Dumping %s (%d bytes):\n", arg, size);
-            hexdump((void*)data, size); // Use the function we created!
-        } else {
-            kprintf("File not found: %s\n", arg);
-        }
+    else if (kstrcmp(input, "ECHO") == 0) {
+        if (arg) kprintf_unsync("%s\n", arg);
+        else kprintf_unsync("Usage: ECHO [text]\n");
     }
-}
-    else if (kstrcmp(input, "LS") == 0) {
-      kprintf("RAMFS Contents:\n");
-      for(int i = 0; i < 32; i++) {
-        if(fs_is_active(i)) {
-            kprintf("- %s \t [%d bytes]\n", fs_get_name(i), fs_get_size(i));
-        }
-      }
+    else if (kstrcmp(input, "STAT") == 0) {
+        // Assuming kheap_stats now uses unsync internal prints
+        kheap_stats();  
     }
-    
-    
-
-  else if (kstrcmp(input, "WRITE") == 0) {
+    else if (kstrcmp(input, "SLEEP") == 0) {
         if (arg) {
-            char* filename = arg;
-            char* content = 0;
-
-            // Search for the space inside the argument string
-            for (int i = 0; arg[i] != '\0'; i++) {
-                if (arg[i] == ' ') {
-                    arg[i] = '\0';        // Terminate filename here
-                    content = &arg[i + 1]; // Content starts after the space
+            int ms = katoi(arg);
+            if (ms > 0) {
+                kprintf_unsync("Shell sleeping for %d ms...\n", ms);
+                VESA_flip(); // Flip here because we are about to block/sleep
+                sleep(ms); 
+                kprintf_unsync("Shell awake.\n");
+            }
+        } else {
+            kprintf_unsync("Usage: SLEEP [ms]\n");
+        }
+    }
+    else if (kstrcmp(input, "RUN") == 0) {
+        if (arg) {
+            int idx = -1;
+            for (int i = 0; i < MAX_FILES; i++) {
+                if (fs_is_active(i) && kstrcmp(fs_get_name(i), arg) == 0) {
+                    idx = i;
                     break;
                 }
             }
-
+            if (idx != -1) {
+                char* file_data = fs_get_data(arg);
+                uint32_t size = fs_get_size(idx);
+                void* raw_code = kmalloc(size + 4096);
+                if (!raw_code) {
+                    kprintf_unsync("Memory allocation failed\n");
+                } else {
+                    uint32_t aligned_code = ((uint32_t)raw_code + 0xFFF) & 0xFFFFF000;
+                    kmemcpy((void*)aligned_code, file_data, size);
+                    int tid = spawn_task((void(*)())aligned_code, raw_code, arg);
+                    kprintf_unsync("Spawned %s (TID: %d, Entry: 0x%x)\n", arg, tid, aligned_code);
+                }
+            } else {
+                kprintf_unsync("File not found: %s\n", arg);
+            }
+        }
+    }
+    else if (kstrcmp(input, "TEST_MALLOC") == 0) {
+        kprintf_unsync("Allocating 100KB...\n");
+        void* p = kmalloc(102400); 
+        kheap_stats();
+        kprintf_unsync("Freeing 100KB...\n");
+        kfree(p);
+        kheap_stats();
+    }
+    else if (kstrcmp(input, "HEXDUMP") == 0) {
+        if (arg) {
+            int found_idx = -1;
+            for (int i = 0; i < MAX_FILES; i++) {
+                if (fs_is_active(i) && kstrcmp(fs_get_name(i), arg) == 0) {
+                    found_idx = i;
+                    break;
+                }
+            }
+            if (found_idx != -1) {
+                char* data = fs_get_data(arg);
+                uint32_t size = fs_get_size(found_idx);
+                kprintf_unsync("Dumping %s (%d bytes):\n", arg, size);
+                // Ensure your hexdump function uses kprintf_unsync internally!
+                hexdump((void*)data, size); 
+            } else {
+                kprintf_unsync("File not found: %s\n", arg);
+            }
+        }
+    }
+    else if (kstrcmp(input, "LS") == 0) {
+        kprintf_unsync("RAMFS Contents:\n");
+        for(int i = 0; i < 32; i++) {
+            if(fs_is_active(i)) {
+                kprintf_unsync("- %s \t [%d bytes]\n", fs_get_name(i), fs_get_size(i));
+            }
+        }
+    }
+    else if (kstrcmp(input, "WRITE") == 0) {
+        if (arg) {
+            char* filename = arg;
+            char* content = 0;
+            for (int i = 0; arg[i] != '\0'; i++) {
+                if (arg[i] == ' ') {
+                    arg[i] = '\0';
+                    content = &arg[i + 1];
+                    break;
+                }
+            }
             if (content) {
                 kcreate_file(filename, content);
-                kprintf("File '%s' saved with data.\n", filename);
+                kprintf_unsync("File '%s' saved.\n", filename);
             } else {
-                kprintf("Usage: WRITE [filename] [text_with_no_spaces]\n");
+                kprintf_unsync("Usage: WRITE [filename] [text]\n");
             }
         }
     }
-
-    else if (kstrcmp(input, "TOUCH") == 0) {
-      if (arg) {
-        kcreate_file(arg, "Empty File");
-        kprintf("Created file: %s\n", arg);
-      }
-    }else if (kstrcmp(input, "YIELD") == 0) {
-      kprintf("Yielding...\n");
-      yield(); 
-      // The CPU "pauses" here. 
-      // When Task B calls yield, the CPU "wakes up" right here!
-      kprintf("Back in Shell!\n");
-    }
-
-else if (kstrcmp(input, "LS") == 0) {
-    kprintf("RAMFS Contents:\n");
-    for(int i = 0; i < 32; i++) {
-        if(fs_is_active(i)) {
-            kprintf("- %s \t [%d bytes]\n", fs_get_name(i), fs_get_size(i));
-        }
-    }
-}
-else if (kstrcmp(input, "CAT") == 0) {
-    if (arg) {
-        char* data = fs_get_data(arg);
-        if (data) {
-            kprintf("%s\n", data);
-        } else {
-            kprintf("File not found: %s\n", arg);
-        }
-    }
-}
-else if (kstrcmp(input, "PS") == 0) {
-    kprintf("TID   NAME         STATE\n");
-    for (int i = 0; i < MAX_TASKS; i++) {
-        if (task_is_ready(i)) {
-            char* name = task_get_name(i);
-            
-            kprintf("%d     ", i); // Print TID
-            kprintf(name);         // Print Name
-            
-            // Manually pad with spaces so the "STATE" column aligns
-            int len = kstrlen(name);
-            for (int j = 0; j < (12 - len); j++) {
-                kprintf(" ");
+    else if (kstrcmp(input, "PS") == 0) {
+        kprintf_unsync("TID   NAME         STATE\n");
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (task_is_ready(i)) {
+                char* name = task_get_name(i);
+                kprintf_unsync("%d     %s", i, name);
+                int len = kstrlen(name);
+                for (int j = 0; j < (12 - len); j++) kprintf_unsync(" ");
+                
+                if (task_get_state(i) == 1)      kprintf_unsync(" READY\n");
+                else if (task_get_state(i) == 2) kprintf_unsync(" SLEEP\n");
             }
-            
-            if (task_get_state(i) == 1)      kprintf(" READY\n");
-            else if (task_get_state(i) == 2) kprintf(" SLEEP (%dms)\n", task_get_sleep_ticks(i));
         }
     }
-}
-
-else if (kstrcmp(input, "TOP") == 0) {
-    run_top();
-    VESA_clear();
-}
-
-else if (kstrcmp(input, "UPTIME") == 0) {
-    // 1. Snapshot the ticks and frequency immediately
-    // This prevents the values from changing mid-calculation
-    uint32_t current_ticks = system_ticks;
-    uint32_t current_freq = timer_frequency;
-
-    if (current_freq == 0) return;
-
-    uint32_t total_seconds = current_ticks / current_freq;
-    
-    // 2. Calculate components
-    uint32_t h = total_seconds / 3600;
-    uint32_t m = (total_seconds % 3600) / 60;
-    uint32_t s = total_seconds % 60;
-
-    kprintf("System Uptime: ");
-    
-    // 3. Print with padding
-    if (h < 10) kprintf("0");
-    kprintf("%d:", h);
-    
-    if (m < 10) kprintf("0");
-    kprintf("%d:", m);
-    
-    if (s < 10) kprintf("0");
-    kprintf("%d\n", s);
-    kprintf("Raw Ticks: %d | Seconds: %d\n", current_ticks, total_seconds);
-}
-
-
-
-  else if (kstrcmp(input, "KILL") == 0) {
+    else if (kstrcmp(input, "TOP") == 0) {
+        run_top(); 
+        VESA_clear(); // Clear back to shell after exiting TOP
+    }
+    else if (kstrcmp(input, "UPTIME") == 0) {
+        uint32_t current_ticks = system_ticks;
+        uint32_t current_freq = 100; // Assuming 100Hz
+        uint32_t s = current_ticks / current_freq;
+        kprintf_unsync("Uptime: %ds (Ticks: %d)\n", s, current_ticks);
+    }
+    else if (kstrcmp(input, "KILL") == 0) {
         if (arg) {
-            // arg points to the character after the space (e.g., "1")
             int id = arg[0] - '0';
-            
-            if (id == 0) {
-                kprintf("Error: Cannot kill the Shell!\n");
-            }
-            else if (kstrcmp(task_get_name(id), "idle") == 0) {
-              kprintf("Error: Cannot kill the system idle process.\n");
-              return;
-            }
-
-      else {
+            if (id == 0) kprintf_unsync("Error: Cannot kill Shell\n");
+            else {
                 kill_task(id);
-                kprintf("Task %d terminated.\n", id);
+                kprintf_unsync("Task %d killed.\n", id);
             }
-        } else {
-            kprintf("Usage: KILL [id]\n");
         }
     }
-  else if (kstrcmp(input, "CLEAR") == 0) {
-      VESA_clear();
+    else if (kstrcmp(input, "CLEAR") == 0) {
+        VESA_clear_buffer_only(); 
+        // No need to flip here, the final flip handles it
     }
-        else if (kstrcmp(input, "REBOOT") == 0) {
-        kprintf("Rebooting system...\n");  
-        // Wait for the keyboard controller to be ready
-        uint8_t good = 0x02;
-        while (good & 0x02) {
-            good = inb(0x64);
-        }
-        // Send the reset command (0xFE) to the controller
+    else if (kstrcmp(input, "REBOOT") == 0) {
+        kprintf_unsync("Rebooting...\n");
+        VESA_flip(); // Must flip so user sees message before CPU resets
         outb(0x64, 0xFE);
-    }else if (kstrcmp(input, "CRASH") == 0) {
-        __asm__ volatile("div %0" :: "r"(0)); // Trigger Division Error
-    }else if (input[0] == '\0') {
-        // Just an empty enter press
-    }else {
-        kprintf("Unknown command: %s\n", input);
+    }
+    else if (kstrcmp(input, "CRASH") == 0) {
+        kprintf_unsync("Triggering CPU Exception...\n");
+        VESA_flip();
+        __asm__ volatile("div %0" :: "r"(0));
+    }
+    else if (input[0] != '\0') {
+        kprintf_unsync("Unknown command: %s\n", input);
+    }
+   
+    int lines_touched = (vesa_cursor_y - start_y) + 12;
+
+    struct multiboot_info* boot_info = VESA_get_boot_info();
+    if (lines_touched > 0 && lines_touched < (int)boot_info->framebuffer_height) {
+        VESA_flip_rows(start_y, lines_touched);
+    } else {
+        // If we scrolled, the whole screen changed, just do a full flip
+        VESA_flip();
     }
 }
+
 void run_top() {
+extern int vesa_updating;
 // 1. CLEAR the keyboard buffer so we don't process old keys
     while (has_key_in_buffer()) {
         get_key_from_buffer();
@@ -310,31 +234,35 @@ void run_top() {
     
     while (1) {
         // Move cursor to 0,0 or clear
-        VESA_clear(); 
+          vesa_updating = 1;         // Lock the timer out
+        VESA_clear_buffer_only();
 
 
-        kprintf("KDXOS TOP - System Ticks: %d\n", system_ticks);
-        kprintf("Press 'q' to return to Shell\n");
-        kprintf("-------------------------------------------\n");
-        kprintf("TID   NAME         STATE      CPU-TICKS\n");
+        kprintf_unsync("KDXOS TOP - System Ticks: %d\n", system_ticks);
+        kprintf_unsync("Press 'q' to return to Shell\n");
+        kprintf_unsync("-------------------------------------------\n");
+        kprintf_unsync("TID   NAME         STATE      CPU-TICKS\n");
 
         for (int i = 0; i < MAX_TASKS; i++) {
             if (task_get_state(i) != 0) {
                 // Print TID and Name
-                kprintf("%d     %s", i, task_get_name(i));
+                kprintf_unsync("%d     %s", i, task_get_name(i));
 
                 // Manual Padding for Name Column (since no %-13s)
                 int name_len = kstrlen(task_get_name(i));
-                for (int j = 0; j < (13 - name_len); j++) kprintf(" ");
+                for (int j = 0; j < (13 - name_len); j++) kprintf_unsync(" ");
 
                 // Print State
-                if (task_get_state(i) == 1)      kprintf("READY      ");
-                else if (task_get_state(i) == 2) kprintf("SLEEP      ");
+                if (task_get_state(i) == 1)      kprintf_unsync("READY      ");
+                else if (task_get_state(i) == 2) kprintf_unsync("SLEEP      ");
 
                 // Print Ticks (We added this field to the task struct earlier)
-                kprintf("%d\n", task_get_total_ticks(i));
+                kprintf_unsync("%d\n", task_get_total_ticks(i));
             }
         }
+        vesa_updating = 0;         // Unlock
+        VESA_flip();               // Show finished frame
+
 
         // --- NON-BLOCKING CHECK ---
         // We use your io.c functions here
@@ -344,11 +272,10 @@ void run_top() {
                 break; // Exit the loop
             }
         }
-
-        // Refresh Rate
-        sleep(500); 
+               sleep(500); 
     }
     
-    VESA_clear();
-    kprintf("Returned to Shell.\n");
+    VESA_clear_buffer_only();
+    kprintf_unsync("Returned to Shell.\n");
+  VESA_flip();
 }

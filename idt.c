@@ -151,10 +151,20 @@ void timer_init(uint32_t frequency) {
 
 // Define this at the top of idt.c
 uint32_t next_stack_ptr = 0;
-
+extern uint32_t target_fps;
 void timer_handler(struct registers *regs) {
     system_ticks++;
-if (multitasking_enabled){
+    // Calculate how many ticks must pass for one frame
+    // Example: 1000Hz / 60 FPS = 16 ticks
+    uint32_t ticks_per_frame = timer_frequency / target_fps;
+
+    // Safety: Ensure we don't divide by zero or get a 0 interval
+    if (ticks_per_frame == 0) ticks_per_frame = 1;
+
+    // Now it updates based on your variable!
+    if (system_ticks % ticks_per_frame == 0) {
+        VESA_flip();
+    }if (multitasking_enabled){
     // --- NEW: CPU Accounting ---
     // Increment the tick count for the task that was just interrupted.
     // This tracks how much actual CPU time each process is getting.

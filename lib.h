@@ -10,3 +10,4 @@ char* kstrcpy(char* dest, const char* src);
 void hexdump(void* ptr, int size); 
 void sleep(int ms); 
 int katoi(char* str);
+void kprintf_unsync(const char* format, ...); 

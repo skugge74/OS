@@ -45,7 +45,7 @@ void shell_task() {
         else if (idx < 127 && c >= ' ') {
             line[idx++] = c;
             char str[2] = {c, '\0'};
-            VESA_print(str, 0x0F);
+            VESA_print(str, COLOR_WHITE);
         }
     }
 }
@@ -125,7 +125,6 @@ void kill_task(int id) {
 
     // 1. Clear visual metadata (Your original logic)
     if (task_list[id].has_drawn) {
-        //VESA_print_at(" ", COLOR_WHITE, task_list[id].last_x, task_list[id].last_y);
         VESA_draw_char(' ', task_list[id].last_x, task_list[id].last_y, 0x222222);
     }
 
@@ -198,4 +197,18 @@ int task_get_sleep_ticks(int id){
 int task_get_total_ticks(int id){
   if (id < 0 || id >= MAX_TASKS) return -1;
   return task_list[id].total_ticks;
+}
+void task_timer() {
+    uint32_t seconds = 0;
+    while (1) {
+        seconds++;
+
+        char buf[20];
+        kmemset(buf, 0, 20);
+        kstrcpy(buf, "TIMER: ");
+        itoa(seconds, buf + 7, 10); 
+        VESA_print_at(buf, 900, 10, 0x00FFFF); 
+
+        sleep(1000); 
+    }
 }
