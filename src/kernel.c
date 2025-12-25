@@ -3,7 +3,6 @@
 #include "lib.h"
 #include "idt.h"
 #include "pmm.h"
-#include "fs.h"
 #include "gdt.h"
 #include "task.h"
 #include "paging.h"
@@ -34,9 +33,8 @@ void kmain(uint32_t magic, struct multiboot_info* mbi) {
     VESA_init(mbi);
     timer_init(100);  
 
-    fat_init();
     // 4. Filesystem & Tasks
-    init_fs();
+    fat_init();
     init_multitasking(); 
 
     // 5. Final output and interrupts

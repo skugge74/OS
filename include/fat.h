@@ -1,7 +1,14 @@
 #ifndef FAT_H
 #define FAT_H
 #include <stdint.h>
-
+#define IDE_PRIMARY_DATA       0x1F0
+#define IDE_PRIMARY_ERR        0x1F1
+#define IDE_PRIMARY_SECCOUNT   0x1F2
+#define IDE_PRIMARY_LBA_LOW    0x1F3
+#define IDE_PRIMARY_LBA_MID    0x1F4
+#define IDE_PRIMARY_LBA_HIGH   0x1F5
+#define IDE_PRIMARY_DRIVE_SEL  0x1F6
+#define IDE_PRIMARY_COMMAND    0x1F7
 struct fat_bpb {
     uint8_t  boot_jump[3];
     char     oem_name[8];
@@ -49,6 +56,7 @@ uint16_t fat_get_next_cluster(uint16_t cluster);
 void* fat_load_file(struct fat_dir_entry* entry);
 void fat_ls();
 
+void ide_read_sector(uint32_t lba, uint8_t* buffer); 
 int fat_compare_name(const char* input, char* fat_name, char* fat_ext); 
 uint32_t get_current_dir_lba();
 void fat_ls();

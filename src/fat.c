@@ -1,5 +1,3 @@
-#include "ide.h"
-#include "lib.h"
 #include "fat.h"
 #include <stdint.h>
 #include "kheap.h"
@@ -14,6 +12,73 @@ static uint32_t first_fat_sector;
 static uint32_t current_dir_cluster = 0; // 0 means Root Directory
 static uint8_t global_fat_buf[512] __attribute__((aligned(16)));
 static uint8_t raw_io_buffer[512] __attribute__((aligned(16)));
+
+unsigned char spinner_code[] = {
+    // 1. Get Ticks (Syscall 2)
+    0xB8, 0x02, 0x00, 0x00, 0x00, // [0]  MOV EAX, 2
+    0xCD, 0x80,                   // [5]  INT 0x80 -> EAX = ticks
+
+    // 2. Slow down and get index (0-3)
+    0xC1, 0xE8, 0x05,             // [7]  SHR EAX, 5 (Slow rotation)
+    0x83, 0xE0, 0x03,             // [10] AND EAX, 3 (Result is 0, 1, 2, or 3)
+
+    // 3. The "String" Lookup
+    // We store the characters "-\|/" in a 32-bit register.
+    // ASCII: '-'=0x2D, '\'=0x5C, '|'=0x7C, '/'=0x2F
+    0xBB, 0x2D, 0x5C, 0x7C, 0x2F, // [13] MOV EBX, 0x2F7C5C2D
+
+    // 4. Shift EBX right by (EAX * 8) bits to bring the character to BL
+    0x88, 0xC1,                   // [18] MOV CL, AL (CL = 0, 1, 2, or 3)
+    0xC1, 0xE1, 0x03,             // [20] SHL CL, 3  (CL = 0, 8, 16, or 24)
+    0xD3, 0xEB,                   // [23] SHR EBX, CL (Shift chosen char into BL)
+    0x81, 0xE3, 0xFF, 0x00, 0x00, 0x00, // [25] AND EBX, 0xFF (Clear upper bits)
+
+    // 5. Print (Syscall 1)
+    0xB8, 0x01, 0x00, 0x00, 0x00, // [31] MOV EAX, 1
+    0xB9, 0xE8, 0x03, 0x00, 0x00, // [36] MOV ECX, 1010 (X)
+    0xBA, 0x05, 0x00, 0x00, 0x00, // [41] MOV EDX, 5  (Y)
+    0xCD, 0x80,                   // [46] INT 0x80
+
+    // 6. Yield
+    0xCD, 0x20,                   // [48] INT 0x20
+
+    // 7. Loop back to index 0
+    0xEB, 0xCC                    // [50] JMP -52 bytes
+    // Total size: 52 bytes. 52 - 52 = 0.
+};
+
+unsigned char clock_code[] = {
+    // 1. Get Ticks (Syscall 2)
+    0xB8, 0x02, 0x00, 0x00, 0x00, // [0]  MOV EAX, 2
+    0xCD, 0x80,                   // [5]  INT 0x80 -> EAX = ticks
+
+    // 2. Extract a "Slow" nibble (4 bits)
+    // Shifting right by 7 means the number changes every 128 ticks (~1.3s)
+    0xC1, 0xE8, 0x07,             // [7]  SHR EAX, 7
+    0x83, 0xE0, 0x0F,             // [10] AND EAX, 0x0F (Keep 0-15)
+
+    // 3. Keep it within 0-9 for now
+    0xBB, 0x0A, 0x00, 0x00, 0x00, // [13] MOV EBX, 10
+    0x31, 0xD2,                   // [18] XOR EDX, EDX
+    0xF7, 0xF3,                   // [20] DIV EBX (Remainder in EDX is 0-9)
+
+    // 4. Convert Digit to ASCII
+    0x83, 0xC2, 0x30,             // [22] ADD EDX, 0x30
+    0x89, 0xD3,                   // [25] MOV EBX, EDX
+
+    // 5. Print (Syscall 1)
+    0xB8, 0x01, 0x00, 0x00, 0x00, // [27] MOV EAX, 1
+    0xB9, 0xE8, 0x03, 0x00, 0x00, // [32] MOV ECX, 1000 (X pos)
+    0xBA, 0x05, 0x00, 0x00, 0x00, // [37] MOV EDX, 5  (Y pos)
+    0xCD, 0x80,                   // [42] INT 0x80
+
+    // 6. Yield
+    0xCD, 0x20,                   // [44] INT 0x20
+
+    // 7. Loop Back
+    0xEB, 0xD0                    // [46] JMP -48 bytes (Back to index 0)
+    // Size: 48 bytes.
+};
 
 int fat_compare_name(const char* input, char* fat_name, char* fat_ext) {
     // 1. HARD MATCH for "." and ".."
@@ -72,6 +137,14 @@ header_t* tail = (header_t*)0xB00218; // The address of your B2
 tail->size = (16 * 1024 * 1024) - ((uint32_t)tail - 0x800000) - sizeof(header_t);
 tail->is_free = 1;
 tail->next = NULL;
+
+fat_touch("SPINNER.BIN");
+    fat_write_file_raw("SPINNER.BIN", (const uint8_t*)spinner_code, sizeof(spinner_code));
+    //kprintf_color(0x00FF00, "SPINNER.BIN created successfully!\n");
+    
+    fat_touch("CLOCK.BIN");
+    fat_write_file_raw("CLOCK.BIN", (const uint8_t*)clock_code, sizeof(clock_code));
+    //kprintf_color(0x00FF00, "CLOCK.BIN created successfully!\n");
 }
 
 // Helper to convert Cluster to LBA
@@ -893,4 +966,21 @@ void fat_write_file_raw(const char* filename, const uint8_t* data, uint32_t size
     ide_write_sector(data_lba, raw_io_buffer);
 
     kprintf_color(0x00FF00, "Successfully wrote RAW %d bytes to %s\n", bytes_to_copy, filename);
+}
+void ide_read_sector(uint32_t lba, uint8_t* buffer) {
+    outb(IDE_PRIMARY_DRIVE_SEL, 0xE0 | ((lba >> 24) & 0x0F));
+    outb(IDE_PRIMARY_SECCOUNT, 1);
+    outb(IDE_PRIMARY_LBA_LOW, (uint8_t)lba);
+    outb(IDE_PRIMARY_LBA_MID, (uint8_t)(lba >> 8));
+    outb(IDE_PRIMARY_LBA_HIGH, (uint8_t)(lba >> 16));
+    outb(IDE_PRIMARY_COMMAND, 0x20); // 0x20 is "Read Sectors"
+
+    // Wait for the drive to be ready
+    while (!(inb(IDE_PRIMARY_COMMAND) & 0x08));
+
+    // Read 256 16-bit words (512 bytes total)
+    uint16_t* ptr = (uint16_t*)buffer;
+    for (int i = 0; i < 256; i++) {
+        ptr[i] = inw(IDE_PRIMARY_DATA);
+    }
 }
