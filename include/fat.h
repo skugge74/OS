@@ -64,4 +64,11 @@ void fat_mkdir(const char* dirname);
 void fat_touch(const char* filename);
 void fat_hexdump_file(const char* filename);
 void fat_write_file(const char* filename, const char* data);
+void fat_rm(const char* filename);
+void fat_rmdir(const char* dirname);
+void fat_pwd();
+void fat_print_path_recursive(uint16_t cluster);
+void fat_ls_cluster(uint32_t cluster);
+struct fat_dir_entry* fat_search_in(const char* filename, uint32_t start_cluster);
+uint32_t fat_get_cluster_from_path(const char* path);
 #endif // !FAT_H

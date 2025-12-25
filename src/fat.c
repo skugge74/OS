@@ -133,13 +133,12 @@ void fat_cd(const char* path) {
     struct fat_dir_entry* entry = fat_search(path);
     
     if (entry) {
-        kprintf_unsync("Found '%s'! Target Cluster: %d, Attr: %x\n", 
-                        path, entry->first_cluster_low, entry->attr);
+        //kprintf_unsync("Found '%s'! Target Cluster: %d, Attr: %x\n", path, entry->first_cluster_low, entry->attr);
 
         if (entry->attr & 0x10) {
             current_dir_cluster = entry->first_cluster_low;
             // Force a refresh of the shell logic
-            kprintf_unsync("Moved to Cluster %d\n", current_dir_cluster);
+            //kprintf_unsync("Moved to Cluster %d\n", current_dir_cluster);
         }
     } else {
         kprintf_unsync("CD: Could not find '%s'\n", path);
@@ -186,6 +185,38 @@ void fat_ls() {
     VESA_flip();
 }
 
+void fat_ls_cluster(uint32_t cluster) {
+    uint8_t buffer[512];
+    uint32_t dir_lba;
+
+    // Determine LBA based on the cluster passed in
+    if (cluster == 0) {
+        dir_lba = first_fat_sector + (bpb.num_fats * bpb.fat_size_16);
+    } else {
+        dir_lba = cluster_to_lba(cluster);
+    }
+
+    ide_read_sector(dir_lba, buffer);
+    struct fat_dir_entry* entry = (struct fat_dir_entry*)buffer;
+    
+    kprintf_unsync("Directory Listing:\n");
+
+    for (int i = 0; i < 16; i++) {
+        if (entry[i].name[0] == 0x00) break;
+        if ((unsigned char)entry[i].name[0] == 0xE5) continue;
+        if (entry[i].attr == 0x0F) continue;
+
+        if (entry[i].attr & 0x10) kprintf_unsync("[DIR] ");
+        else kprintf_unsync("      ");
+
+        // Use your existing name printing logic here
+        fat_print_name_ext(entry[i].name, entry[i].ext);
+        
+        kprintf_unsync("  %d bytes\n", entry[i].size);
+    }
+    VESA_flip();
+}
+
 uint32_t fat_get_current_cluster() {
     return current_dir_cluster;
 }
@@ -200,19 +231,17 @@ void fat_print_fixed(const char* str, int len) {
     }
 }
 void fat_print_name_ext(unsigned char* name, unsigned char* ext) {
-    // Print the 8-character name
+    // 1. Print the 8-character name
     for (int i = 0; i < 8; i++) {
-        if (name[i] != ' ') {
-            kputc(name[i]);
-        }
+        if (name[i] != ' ') kputc(name[i]);
     }
 
-    // Only print the dot if there is an extension
-    if (ext[0] != ' ') {
-        kputc('.');
-        for (int i = 0; i < 3; i++) {
-            if (ext[i] != ' ') {
-                kputc(ext[i]);
+    // 2. ONLY print a dot if it's NOT "." or ".." AND has an extension
+    if (name[0] != '.') {
+        if (ext[0] != ' ' || ext[1] != ' ' || ext[2] != ' ') {
+            kputc('.');
+            for (int i = 0; i < 3; i++) {
+                if (ext[i] != ' ') kputc(ext[i]);
             }
         }
     }
@@ -397,7 +426,7 @@ void fat_touch(const char* filename) {
     }
 
     // Copy Name part
-    int name_len = (dot_pos == -1) ? kstrlen(filename) : dot_pos;
+    int name_len = (int)(dot_pos == -1) ? kstrlen(filename) : (size_t)dot_pos;
     for (int i = 0; i < name_len && i < 8; i++) {
         char c = filename[i];
         if (c >= 'a' && c <= 'z') c -= 32;
@@ -516,4 +545,172 @@ void fat_write_file(const char* filename, const char* data) {
     kprintf("Successfully wrote %d bytes to %s\n", data_len, filename);
 
     kfree(sector_buffer);
+}
+void fat_rm(const char* filename) {
+    uint8_t buffer[512];
+    uint32_t dir_lba = get_current_dir_lba();
+    ide_read_sector(dir_lba, buffer);
+    struct fat_dir_entry* entries = (struct fat_dir_entry*)buffer;
+
+    for (int i = 0; i < 16; i++) {
+        if (fat_compare_name(filename, (char*)entries[i].name, (char*)entries[i].ext)) {
+            if (entries[i].attr & 0x10) {
+                kprintf_unsync("Error: %s is a directory. Use RMDIR.\n", filename);
+                return;
+            }
+
+            // 1. Free the cluster chain in the FAT table
+            uint16_t cluster = entries[i].first_cluster_low;
+            while (cluster != 0 && cluster < 0xFFF8) {
+                uint16_t next = fat_get_next_cluster(cluster);
+                fat_update_table(cluster, 0x0000); // 0x0000 = Free
+                cluster = next;
+            }
+
+            // 2. Mark the directory entry as deleted
+            entries[i].name[0] = 0xE5; 
+            ide_write_sector(dir_lba, buffer);
+            
+            kprintf_unsync("File '%s' removed.\n", filename);
+            return;
+        }
+    }
+    kprintf_unsync("Error: File not found.\n");
+}
+void fat_rmdir(const char* dirname) {
+    if (kstrcmp(dirname, ".") == 0 || kstrcmp(dirname, "..") == 0) {
+        kprintf_unsync("Error: Cannot remove . or ..\n");
+        return;
+    }
+
+    uint8_t buffer[512];
+    uint32_t dir_lba = get_current_dir_lba();
+    ide_read_sector(dir_lba, buffer);
+    struct fat_dir_entry* entries = (struct fat_dir_entry*)buffer;
+
+    for (int i = 0; i < 16; i++) {
+        if (fat_compare_name(dirname, (char*)entries[i].name, (char*)entries[i].ext)) {
+            if (!(entries[i].attr & 0x10)) {
+                kprintf_unsync("Error: %s is a file. Use RM.\n", dirname);
+                return;
+            }
+
+            // 1. Free the directory's cluster
+            uint16_t cluster = entries[i].first_cluster_low;
+            if (cluster != 0) {
+                fat_update_table(cluster, 0x0000);
+            }
+
+            // 2. Mark entry as deleted
+            entries[i].name[0] = 0xE5;
+            ide_write_sector(dir_lba, buffer);
+
+            kprintf_unsync("Directory '%s' removed.\n", dirname);
+            return;
+        }
+    }
+
+    kprintf_unsync("Error: Directory not found.\n");
+}
+void fat_print_path_recursive(uint16_t cluster) {
+    // Base Case: We reached the Root
+    if (cluster == 0) {
+        return;
+    }
+
+    // 1. Read the current cluster to find the ".." (parent) cluster
+    uint8_t buf[512];
+    ide_read_sector(cluster_to_lba(cluster), buf);
+    struct fat_dir_entry* entries = (struct fat_dir_entry*)buf;
+
+    // In subdirectories, entries[0] is "." and entries[1] is ".."
+    uint16_t parent_cluster = entries[1].first_cluster_low;
+
+    // 2. RECURSE: Go up to the parent first so we print from top-down
+    fat_print_path_recursive(parent_cluster);
+
+    // 3. After returning from the parent, find our name in that parent
+    uint32_t parent_lba = (parent_cluster == 0) ? 
+        (first_fat_sector + (bpb.num_fats * bpb.fat_size_16)) : 
+        cluster_to_lba(parent_cluster);
+
+    // Search parent directory for the entry pointing to our current 'cluster'
+    ide_read_sector(parent_lba, buf);
+    entries = (struct fat_dir_entry*)buf;
+
+    kputc('/'); // Print separator
+    for (int i = 0; i < 16; i++) {
+        if (entries[i].first_cluster_low == cluster) {
+            // Found this folder's entry! Print its name.
+            for (int n = 0; n < 8 && entries[i].name[n] != ' '; n++) {
+                kputc(entries[i].name[n]);
+            }
+            return; 
+        }
+    }
+}
+
+void fat_pwd() {
+    if (fat_get_current_cluster() == 0) {
+        kprintf_unsync("/\n");
+    } else {
+        fat_print_path_recursive(fat_get_current_cluster());
+        kprintf_unsync("\n");
+    }
+}
+struct fat_dir_entry* fat_search_in(const char* filename, uint32_t start_cluster) {
+    static struct fat_dir_entry result;
+    uint8_t buffer[512];
+    
+    // Determine where to start searching
+    uint32_t lba = (start_cluster == 0) ? 
+        (first_fat_sector + (bpb.num_fats * bpb.fat_size_16)) : 
+        cluster_to_lba(start_cluster);
+
+    ide_read_sector(lba, buffer);
+    struct fat_dir_entry* entries = (struct fat_dir_entry*)buffer;
+
+    for (int i = 0; i < 16; i++) {
+        if (entries[i].name[0] == 0x00) return NULL;
+        if (fat_compare_name(filename, (char*)entries[i].name, (char*)entries[i].ext)) {
+            kmemcpy(&result, &entries[i], sizeof(struct fat_dir_entry));
+            return &result;
+        }
+    }
+    return NULL;
+}
+uint32_t fat_get_cluster_from_path(const char* path) {
+    // If path starts with '/', start at Root (0), otherwise start at Current
+    uint32_t walk_cluster = (path[0] == '/') ? 0 : current_dir_cluster;
+    
+    char temp[128];
+    kstrcpy(temp, path);
+    char* part = temp;
+    if (*part == '/') part++;
+
+    char* next_part = part;
+    while (next_part != NULL) {
+        // Find next slash
+        char* slash = NULL;
+        for (char* c = next_part; *c != '\0'; c++) {
+            if (*c == '/') {
+                slash = c;
+                break;
+            }
+        }
+
+        if (slash) {
+            *slash = '\0';
+            struct fat_dir_entry* e = fat_search_in(next_part, walk_cluster);
+            if (!e || !(e->attr & 0x10)) return 0xFFFFFFFF; // Error
+            walk_cluster = e->first_cluster_low;
+            next_part = slash + 1;
+        } else {
+            // Last part of path
+            struct fat_dir_entry* e = fat_search_in(next_part, walk_cluster);
+            if (!e || !(e->attr & 0x10)) return 0xFFFFFFFF;
+            return e->first_cluster_low;
+        }
+    }
+    return walk_cluster;
 }

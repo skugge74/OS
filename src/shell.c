@@ -149,10 +149,29 @@ else if (kstrcmp(input, "SET_FPS") == 0) {
         kprintf_unsync("Usage: HEXDUMP <filename>\n");
     }
 }  
-
-  else if (kstrcmp(input, "LS") == 0) {
-    fat_ls();
+else if (kstrcmp(input, "RM") == 0) {
+    if (arg) fat_rm(arg);
+    else kprintf_unsync("Usage: RM <filename>\n");
 }
+else if (kstrcmp(input, "RMDIR") == 0) {
+    if (arg) fat_rmdir(arg);
+    else kprintf_unsync("Usage: RMDIR <dirname>\n");
+}
+
+else if (kstrcmp(input, "LS") == 0) {
+    if (arg && kstrlen(arg) > 0) {
+        uint32_t target = fat_get_cluster_from_path(arg);
+        if (target != 0xFFFFFFFF) {
+            fat_ls_cluster(target);
+        } else {
+            kprintf_unsync("Directory not found.\n");
+        }
+    } else {
+        fat_ls_cluster(fat_get_current_cluster());
+      
+    }
+}
+
 else if (kstrcmp(input, "CD") == 0) {
     if (arg) {
         fat_cd(arg);
@@ -169,7 +188,12 @@ else if (kstrcmp(input, "TOUCH") == 0) {
 }
 
 else if (kstrcmp(input, "PWD") == 0) {
-    kprintf_unsync("Current Cluster: %d (0 = Root)\n", fat_get_current_cluster());
+    if (fat_get_current_cluster() == 0) {
+        kprintf_unsync("/\n");
+    } else {
+        fat_print_path_recursive(fat_get_current_cluster());
+        kprintf_unsync("\n");
+    }
 }
    else if (kstrcmp(input, "WRITE") == 0) {
     // 'arg' contains everything after "WRITE " (e.g., "test.txt hello world")
