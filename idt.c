@@ -239,9 +239,6 @@ void syscall_handler(struct registers *regs) {
         int x = regs->ecx;
         int y = regs->edx;
         
-        task_list[current_task_idx].last_x = x;
-        task_list[current_task_idx].last_y = y;
-        task_list[current_task_idx].has_drawn = 1;
         // Use your VESA function to draw it!
         VESA_draw_char(c, x, y, 0xFFFFFF); 
     } 

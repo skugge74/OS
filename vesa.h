@@ -68,4 +68,5 @@ void VESA_clear_buffer_only();
 struct multiboot_info* VESA_get_boot_info();
 void VESA_set_fps(uint32_t fps);
 void VESA_print_at(const char* str, int x, int y, uint32_t color);
+void VESA_clear_region(int x, int y, int w, int h);
 #endif // !VESA_H

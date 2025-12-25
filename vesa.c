@@ -1,13 +1,15 @@
 #include "vesa.h"
 #include "kheap.h"
 #include "lib.h"
+#include "task.h"
 
+extern struct task task_list[];
 static struct multiboot_info* boot_info = 0;
 int vesa_cursor_x = 0;
 int vesa_cursor_y = 0;
 int vesa_dirty = 0;
 int vesa_updating = 0; // The LOCK: 1 = Busy drawing, 0 = Safe to flip
-
+extern int current_task_idx;
 static uint32_t* back_buffer = NULL;
 static uint32_t total_pixels = 0;
 static uint32_t screen_width = 0;
@@ -84,16 +86,46 @@ void VESA_flip_rows(int y, int h) {
 }
 
 void VESA_draw_char(char c, int x, int y, uint32_t color) {
-    if (!back_buffer) return;
-    vesa_dirty = 1; 
+    // 1. Safety check: Ensure we have a buffer and aren't drawing off-screen
+    if (!back_buffer || x < 0 || y < 0 || 
+        x + 8 > (int)screen_width || 
+        y + 8 > (int)boot_info->framebuffer_height) return;
+
+    // 2. Metadata tracking (Skip for Shell/Task 0)
+    // We use a local pointer to avoid repeated indexing into the volatile array
+    if (current_task_idx > 0 && current_task_idx < MAX_TASKS) {
+        volatile struct task* cur = &task_list[current_task_idx];
+        
+        if (!cur->has_drawn) {
+            cur->first_x = x;
+            cur->first_y = y;
+            cur->last_x  = x + 8;
+            cur->last_y  = y + 8;
+            cur->has_drawn = 1;
+        } else {
+            // Expand bounding box
+            if (x < cur->first_x) cur->first_x = x;
+            if (y < cur->first_y) cur->first_y = y;
+            if (x + 8 > cur->last_x) cur->last_x = x + 8;
+            if (y + 8 > cur->last_y) cur->last_y = y + 8;
+        }
+    }
+    
+    // 3. Signal that the frame buffer needs a refresh
+    vesa_dirty = 1;
+
+    // 4. Drawing Logic
     uint32_t bg_color = 0x222222;
     uint8_t* glyph = font8x8_basic[(int)c];
 
     for (int row = 0; row < 8; row++) {
+        // Calculate the row start once per row
         uint32_t* dest = &back_buffer[(y + row) * screen_width + x];
         uint8_t data = glyph[row];
 
         for (int col = 0; col < 8; col++) {
+            // Use bitmasking to check font bits
+            // (7 - col) handles the bit order of the 8x8 font
             if (data & (1 << (7 - col))) {
                 dest[col] = color;
             } else {
@@ -166,4 +198,30 @@ void VESA_scroll() {
 void VESA_clear() {
     VESA_clear_buffer_only();
     VESA_flip();
+}
+/**
+ * Wipes a specific rectangle in the back buffer.
+ * x, y: Top-left corner
+ * w, h: Width and Height in pixels
+ */
+void VESA_clear_region(int x, int y, int w, int h) {
+    if (!back_buffer) return;
+
+    // 1. Precise Boundary Checks
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > (int)screen_width) w = screen_width - x;
+    if (y + h > (int)boot_info->framebuffer_height) h = boot_info->framebuffer_height - y;
+    if (w <= 0 || h <= 0) return;
+
+    uint32_t bg_color = 0x222222; 
+
+    for (int i = 0; i < h; i++) {
+        uint32_t* dest = &back_buffer[(y + i) * screen_width + x];
+        for (int j = 0; j < w; j++) {
+            dest[j] = bg_color; // Correctly sets the full 32-bit pixel
+        }
+    }
+
+    vesa_dirty = 1; 
 }

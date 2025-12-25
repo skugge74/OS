@@ -57,7 +57,7 @@ int spawn_task(void (*entry_point)(), void* code_ptr, char* name) {
             task_list[i].has_drawn = 0;
             task_list[i].last_x = 0;
             task_list[i].last_y = 0;
-            
+
             // Initialize CPU Accounting and Sleep state ---
             task_list[i].total_ticks = 0;    // Reset CPU odometer
             task_list[i].sleep_ticks = 0;    // Ensure it doesn't start asleep
@@ -123,30 +123,37 @@ void yield() {
 void kill_task(int id) {
     if (id <= 0 || id >= MAX_TASKS) return;
 
-    // 1. Clear visual metadata (Your original logic)
     if (task_list[id].has_drawn) {
-        VESA_draw_char(' ', task_list[id].last_x, task_list[id].last_y, 0x222222);
+        int w = task_list[id].last_x - task_list[id].first_x;
+        int h = task_list[id].last_y - task_list[id].first_y;
+        
+        // Safety check to prevent massive unsigned underflow clears
+        if (w > 0 && w < 2000 && h > 0 && h < 2000) {
+            VESA_clear_region(task_list[id].first_x, task_list[id].first_y, w, h);
+            VESA_flip(); 
+        }
     }
 
-    // 2. RELEASE MEMORY (The Fix)
-    // Free the stack
-    if (task_list[id].stack_ptr != NULL) {
+    // Mark as dead immediately to stop the scheduler from picking it
+    task_list[id].state = 0;
+
+    if (task_list[id].stack_ptr) {
         kfree(task_list[id].stack_ptr);
         task_list[id].stack_ptr = NULL;
     }
-
-    // Free the code image (allocated in the RUN command)
-    if (task_list[id].code_ptr != NULL) {
+    if (task_list[id].code_ptr) {
         kfree(task_list[id].code_ptr);
         task_list[id].code_ptr = NULL;
     }
 
-    // 3. Mark as dead
-    task_list[id].state = 0;
+    // Reset everything for the next spawn
     task_list[id].has_drawn = 0;
+    task_list[id].first_x = 0;
+    task_list[id].first_y = 0;
     task_list[id].last_x = 0;
     task_list[id].last_y = 0;
 }
+
 void idle_task_code() {
     while(1) {
         __asm__ volatile("hlt");
@@ -154,8 +161,13 @@ void idle_task_code() {
 }
 void init_multitasking() {
     multitasking_enabled = 1;
-    for (int i = 0; i < MAX_TASKS; i++) task_list[i].state = 0;
-
+    for (int i = 0; i < MAX_TASKS; i++){
+      task_list[i].state = 0;
+      task_list[i].first_x = 0; // Default to 0 for the shell
+      task_list[i].first_y = 0;
+      task_list[i].last_x = 0;
+      task_list[i].last_y = 0;
+    }
     // Task 0: Shell
     task_list[0].state = 1;
     kstrncpy((char* )task_list[0].name, "shell", 15);

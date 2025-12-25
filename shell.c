@@ -9,6 +9,7 @@
 #include "kheap.h" 
 #include "idt.h"
 
+extern int vesa_updating;
 extern uint32_t system_ticks;
 extern uint32_t total_pages;
 extern uint32_t timer_frequency;        // Add this!
@@ -43,7 +44,7 @@ void execute_command(char* input) {
         arg++;       
     }
     int start_y = vesa_cursor_y;
-
+    vesa_updating = 1;
     if (kstrcmp(input, "HELP") == 0) {
         kprintf_unsync("Commands: HELP, ECHO, RUN, REBOOT, CRASH, STAT, LS, PS, TOP, CLEAR\n");
     }
@@ -213,7 +214,7 @@ else if (kstrcmp(input, "SET_FPS") == 0) {
     }
    
     int lines_touched = (vesa_cursor_y - start_y) + 12;
-
+    vesa_updating = 0; 
     struct multiboot_info* boot_info = VESA_get_boot_info();
     if (lines_touched > 0 && lines_touched < (int)boot_info->framebuffer_height) {
         VESA_flip_rows(start_y, lines_touched);
@@ -224,7 +225,6 @@ else if (kstrcmp(input, "SET_FPS") == 0) {
 }
 
 void run_top() {
-extern int vesa_updating;
 // 1. CLEAR the keyboard buffer so we don't process old keys
     while (has_key_in_buffer()) {
         get_key_from_buffer();

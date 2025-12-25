@@ -13,6 +13,8 @@ struct task {
     uint32_t vga_index; // Store the character position (0-3999)
     int last_x; // Track the X coordinate used in syscall
     int last_y; // Track the Y coordinate used in syscall
+    int first_x; // Track the Y coordinate used in syscall
+    int first_y; // Track the Y coordinate used in syscall
     int has_drawn; // Boolean flag: did this task ever print?
     void* stack_ptr; // Store this so we can kfree it!
     void* code_ptr;  // Store this so we can kfree it!
