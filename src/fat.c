@@ -130,18 +130,18 @@ struct fat_dir_entry* fat_search(const char* filename) {
 }
 
 void fat_cd(const char* path) {
-    struct fat_dir_entry* entry = fat_search(path);
-    
-    if (entry) {
-        //kprintf_unsync("Found '%s'! Target Cluster: %d, Attr: %x\n", path, entry->first_cluster_low, entry->attr);
+    // 1. Use the Path Walker to find the cluster
+    uint32_t target_cluster = fat_get_cluster_from_path(path);
 
-        if (entry->attr & 0x10) {
-            current_dir_cluster = entry->first_cluster_low;
-            // Force a refresh of the shell logic
-            //kprintf_unsync("Moved to Cluster %d\n", current_dir_cluster);
-        }
+    if (target_cluster != 0xFFFFFFFF) {
+        // 2. Success: Update the global state
+        current_dir_cluster = target_cluster;
+        
+        // 3. Optional: Feedback to the user
+        kprintf_unsync("Moved to: ");
+        fat_pwd(); // Use your recursive PWD to show where we are now
     } else {
-        kprintf_unsync("CD: Could not find '%s'\n", path);
+        kprintf_unsync("CD: Could not find path '%s'\n", path);
     }
 }
 
