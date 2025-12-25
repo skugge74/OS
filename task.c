@@ -7,7 +7,8 @@
 #include "lib.h"
 
 #define MAX_TASKS 10
-
+int keyboard_focus_tid = 0; // Default focus is the Shell (Task 0)
+extern int vesa_updating;
 // External assembly function
 extern void switch_to_stack(uint32_t* old_esp, uint32_t new_esp);
 extern volatile uint32_t system_ticks;
@@ -223,4 +224,135 @@ void task_timer() {
 
         sleep(1000); 
     }
+}
+void task_game() {
+    int previous_focus = keyboard_focus_tid;
+    keyboard_focus_tid = current_task_idx;
+    
+  // 1. Preparation
+    while (has_key_in_buffer()) { get_key_from_buffer(); }
+    
+    vesa_updating = 1;      // Lock out background flips
+    VESA_clear();           // Full screen clear for "App Mode"
+    vesa_updating = 0;
+
+    int x = 500, y = 500;
+    int old_x = 500, old_y = 500;
+    int exit = 0;
+
+    // 2. Initial Draw
+    VESA_draw_char('*', x, y, 0x00FFFF);
+    VESA_flip();
+
+    while (exit == 0) {
+        if (has_key_in_buffer()) {
+            char c = get_key_from_buffer();
+            
+            if (c == 'q' || c == 'Q') {
+                exit = 1;
+                break;
+            }
+
+            // Save old coordinates to erase them
+            old_x = x;
+            old_y = y;
+
+            switch (c) {  
+                case 'w': y -= 8; break;
+                case 's': y += 8; break;
+                case 'a': x -= 8; break;
+                case 'd': x += 8; break;
+            }
+
+            // 3. Optimized Rendering
+            vesa_updating = 1;
+            
+            // Wipe ONLY the 8x8 pixels of the previous position
+            VESA_clear_region(old_x, old_y, 8, 8);
+            
+            // Draw new position
+            VESA_draw_char('*', x, y, 0x00FFFF);
+
+            // TIGHTEN the metadata box so 'KILL' only wipes the current player
+            task_list[current_task_idx].first_x = x;
+            task_list[current_task_idx].first_y = y;
+            task_list[current_task_idx].last_x = x + 8;
+            task_list[current_task_idx].last_y = y + 8;
+
+            vesa_updating = 0;
+            VESA_flip(); 
+        } else {
+            // Stay polite! Let the spinner and shell logic breathe
+            yield();
+        }
+    }
+
+    // 4. Exit Cleanup
+    vesa_updating = 1;
+    VESA_clear(); // Clear the game screen before returning to shell
+    vesa_updating = 0;
+    keyboard_focus_tid = previous_focus;
+    // Reset Shell cursor to top-left so the prompt looks right
+    vesa_cursor_x = 0;
+    vesa_cursor_y = 0;
+}
+void run_top() {
+int previous_focus = keyboard_focus_tid;
+    keyboard_focus_tid = current_task_idx;
+
+// 1. CLEAR the keyboard buffer so we don't process old keys
+    while (has_key_in_buffer()) {
+        get_key_from_buffer();
+    }
+    // Initial clear
+    VESA_clear();
+    
+    while (1) {
+        // Move cursor to 0,0 or clear
+          vesa_updating = 1;         // Lock the timer out
+        VESA_clear_buffer_only();
+
+
+        kprintf_unsync("KDXOS TOP - System Ticks: %d\n", system_ticks);
+        kprintf_unsync("Press 'q' to return to Shell\n");
+        kprintf_unsync("-------------------------------------------\n");
+        kprintf_unsync("TID   NAME         STATE      CPU-TICKS\n");
+
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (task_get_state(i) != 0) {
+                // Print TID and Name
+                kprintf_unsync("%d     %s", i, task_get_name(i));
+
+                // Manual Padding for Name Column (since no %-13s)
+                int name_len = kstrlen(task_get_name(i));
+                for (int j = 0; j < (13 - name_len); j++) kprintf_unsync(" ");
+
+                // Print State
+                if (task_get_state(i) == 1)      kprintf_unsync("READY      ");
+                else if (task_get_state(i) == 2) kprintf_unsync("SLEEP      ");
+
+                // Print Ticks (We added this field to the task struct earlier)
+                kprintf_unsync("%d\n", task_get_total_ticks(i));
+            }
+        }
+        vesa_updating = 0;         // Unlock
+        VESA_flip();               // Show finished frame
+
+
+        // --- NON-BLOCKING CHECK ---
+        // We use your io.c functions here
+        if (has_key_in_buffer()) {
+            char c = get_key_from_buffer(); 
+            if (c == 'q' || c == 'Q') {
+                break; // Exit the loop
+            }
+        }
+               sleep(500); 
+    }
+    
+    VESA_clear_buffer_only();
+
+    keyboard_focus_tid = previous_focus;
+    kprintf_unsync("Returned to Shell.\n");
+  VESA_flip();
 }

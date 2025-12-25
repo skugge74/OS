@@ -59,6 +59,10 @@ else if (kstrcmp(input, "SET_FPS") == 0) {
     int tid = spawn_task(task_timer, 0, "timer");
     kprintf_unsync("Timer task spawned (TID: %d)\n", tid);
     }
+     else if (kstrcmp(input, "GAME") == 0){
+    // We pass 0 for 'raw_code' because it's a kernel-space function, not an loaded file.
+    task_game();
+    }
     else if (kstrcmp(input, "ECHO") == 0) {
         if (arg) kprintf_unsync("%s\n", arg);
         else kprintf_unsync("Usage: ECHO [text]\n");
@@ -224,58 +228,4 @@ else if (kstrcmp(input, "SET_FPS") == 0) {
     }
 }
 
-void run_top() {
-// 1. CLEAR the keyboard buffer so we don't process old keys
-    while (has_key_in_buffer()) {
-        get_key_from_buffer();
-    }
-    // Initial clear
-    VESA_clear();
-    
-    while (1) {
-        // Move cursor to 0,0 or clear
-          vesa_updating = 1;         // Lock the timer out
-        VESA_clear_buffer_only();
 
-
-        kprintf_unsync("KDXOS TOP - System Ticks: %d\n", system_ticks);
-        kprintf_unsync("Press 'q' to return to Shell\n");
-        kprintf_unsync("-------------------------------------------\n");
-        kprintf_unsync("TID   NAME         STATE      CPU-TICKS\n");
-
-        for (int i = 0; i < MAX_TASKS; i++) {
-            if (task_get_state(i) != 0) {
-                // Print TID and Name
-                kprintf_unsync("%d     %s", i, task_get_name(i));
-
-                // Manual Padding for Name Column (since no %-13s)
-                int name_len = kstrlen(task_get_name(i));
-                for (int j = 0; j < (13 - name_len); j++) kprintf_unsync(" ");
-
-                // Print State
-                if (task_get_state(i) == 1)      kprintf_unsync("READY      ");
-                else if (task_get_state(i) == 2) kprintf_unsync("SLEEP      ");
-
-                // Print Ticks (We added this field to the task struct earlier)
-                kprintf_unsync("%d\n", task_get_total_ticks(i));
-            }
-        }
-        vesa_updating = 0;         // Unlock
-        VESA_flip();               // Show finished frame
-
-
-        // --- NON-BLOCKING CHECK ---
-        // We use your io.c functions here
-        if (has_key_in_buffer()) {
-            char c = get_key_from_buffer(); 
-            if (c == 'q' || c == 'Q') {
-                break; // Exit the loop
-            }
-        }
-               sleep(500); 
-    }
-    
-    VESA_clear_buffer_only();
-    kprintf_unsync("Returned to Shell.\n");
-  VESA_flip();
-}

@@ -35,4 +35,6 @@ int task_get_state(int id);
 int task_get_sleep_ticks(int id);
 int task_get_total_ticks(int id);
 void task_timer();
+void task_game();
+void run_top();
 #endif

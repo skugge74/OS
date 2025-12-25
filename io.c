@@ -8,7 +8,8 @@ extern int kbd_tail;
 static char key_buffer[256];
 static int head = 0;
 static int tail = 0;
-
+extern int keyboard_focus_tid;
+extern int current_task_idx;
 // This is what the Linker is looking for!
 int has_key_in_buffer() {
     return head != tail;
@@ -38,13 +39,26 @@ uint8_t keyboard_read_scancode() {
     return inb(0x60);
 }
 
+
 char keyboard_getchar() {
-    // Check if a key is actually waiting in your buffer
-    while (!has_key_in_buffer()) {
-        yield(); // Give CPU to spin.bin while waiting for a finger to press a key!
+    while (1) {
+        // 1. If this task does NOT have focus, it must not touch the buffer!
+        // It just yields and waits for its turn to be the foreground task.
+        if (current_task_idx != keyboard_focus_tid) {
+            yield();
+            continue; 
+        }
+
+        // 2. If we HAVE focus, check if there is a key waiting
+        if (has_key_in_buffer()) {
+            return get_key_from_buffer();
+        }
+
+        // 3. No key? Yield to let other tasks (like the Spinner) run
+        yield();
     }
-    return get_key_from_buffer();
-}// Now accepts 'shift' as an argument
+}
+
 char scancode_to_ascii(uint8_t scancode, int shift) {
     switch(scancode) {
         // Number row
