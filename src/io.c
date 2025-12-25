@@ -121,3 +121,14 @@ char scancode_to_ascii(uint8_t scancode, int shift) {
         default:   return 0;
     }
 }
+// Read 16 bits from the specified I/O port
+uint16_t inw(uint16_t port) {
+    uint16_t result;
+    __asm__ volatile ("inw %1, %0" : "=a" (result) : "dN" (port));
+    return result;
+}
+
+// Write 16 bits to the specified I/O port
+void outw(uint16_t port, uint16_t data) {
+    __asm__ volatile ("outw %0, %1" : : "a" (data), "dN" (port));
+}

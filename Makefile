@@ -24,6 +24,18 @@ KERNEL_ISO = $(BINDIR)/myos.iso
 
 all: prepare $(KERNEL_ISO)
 
+
+disk:
+	# Create a 10MB empty file
+	dd if=/dev/zero of=disk.img bs=1M count=10
+	# Format it as FAT16
+	sudo mkfs.fat -F 16 disk.img
+	# Copy your spinner.bin into it (mount it first)
+copy: 
+	mcopy -i disk.img test.txt ::/text.txt
+lsdisk:
+	mdir -i disk.img ::/
+	
 # Create the directories if they don't exist
 prepare:
 	@mkdir -p $(BUILDDIR)
@@ -52,7 +64,7 @@ $(KERNEL_ISO): $(KERNEL_BIN)
 	@rm -rf isodir
 
 run:
-	qemu-system-i386 -cdrom $(KERNEL_ISO) -boot d
+	qemu-system-i386 -cdrom $(KERNEL_ISO) -hda disk.img -boot d
 
 clean:
 	rm -rf $(BUILDDIR) $(BINDIR) isodir

@@ -8,7 +8,7 @@
 #include "fs.h" 
 #include "kheap.h" 
 #include "idt.h"
-
+#include "fat.h"
 extern int vesa_updating;
 extern uint32_t system_ticks;
 extern uint32_t total_pages;
@@ -46,8 +46,32 @@ void execute_command(char* input) {
     int start_y = vesa_cursor_y;
     vesa_updating = 1;
     if (kstrcmp(input, "HELP") == 0) {
-        kprintf_unsync("Commands: HELP, ECHO, RUN, REBOOT, CRASH, STAT, LS, PS, TOP, CLEAR\n");
+        kprintf_unsync("Commands: LS CD CAT MKDIR PWD TOUCH CLEAR STAT PS KILL SLEEP RUN TOP UPTIME REBOOT CRASH ECHO SET_FPS TIMER GAME TEST_MALLOC HEXDUMP WRITE\n");
     }
+else if (kstrcmp(input, "CAT") == 0) {
+    if (arg) {
+        struct fat_dir_entry* file = fat_search(arg);
+        if (file && !(file->attr & 0x10)) {
+            char* buffer = (char*)fat_load_file(file);
+            if (buffer) {
+                // Print the file content
+                kprintf_unsync("%s\n", buffer);
+                kfree(buffer); // Clean up memory!
+            }
+        } else {
+            kprintf_unsync("File not found.\n");
+        }
+    }
+}
+
+else if (kstrcmp(input, "MKDIR") == 0) {
+    if (arg) {
+        fat_mkdir(arg);
+    } else {
+        kprintf_unsync("Usage: MKDIR <name>\n");
+    }
+}
+
 else if (kstrcmp(input, "SET_FPS") == 0) {
     if (arg) {
         target_fps = katoi(arg);
@@ -119,52 +143,59 @@ else if (kstrcmp(input, "SET_FPS") == 0) {
         kheap_stats();
     }
     else if (kstrcmp(input, "HEXDUMP") == 0) {
-        if (arg) {
-            int found_idx = -1;
-            for (int i = 0; i < MAX_FILES; i++) {
-                if (fs_is_active(i) && kstrcmp(fs_get_name(i), arg) == 0) {
-                    found_idx = i;
-                    break;
-                }
-            }
-            if (found_idx != -1) {
-                char* data = fs_get_data(arg);
-                uint32_t size = fs_get_size(found_idx);
-                kprintf_unsync("Dumping %s (%d bytes):\n", arg, size);
-                // Ensure your hexdump function uses kprintf_unsync internally!
-                hexdump((void*)data, size); 
-            } else {
-                kprintf_unsync("File not found: %s\n", arg);
+    if (arg) {
+        fat_hexdump_file(arg);
+    } else {
+        kprintf_unsync("Usage: HEXDUMP <filename>\n");
+    }
+}  
+
+  else if (kstrcmp(input, "LS") == 0) {
+    fat_ls();
+}
+else if (kstrcmp(input, "CD") == 0) {
+    if (arg) {
+        fat_cd(arg);
+    } else {
+        kprintf_unsync("Usage: CD <dirname>\n");
+    }
+}
+else if (kstrcmp(input, "TOUCH") == 0) {
+    if (arg) {
+        fat_touch(arg);
+    } else {
+        kprintf_unsync("Usage: TOUCH <filename>\n");
+    }
+}
+
+else if (kstrcmp(input, "PWD") == 0) {
+    kprintf_unsync("Current Cluster: %d (0 = Root)\n", fat_get_current_cluster());
+}
+   else if (kstrcmp(input, "WRITE") == 0) {
+    // 'arg' contains everything after "WRITE " (e.g., "test.txt hello world")
+    if (arg && kstrlen(arg) > 0) {
+        char* filename = arg;
+        char* content = NULL;
+
+        // 1. Find the space that separates the filename from the text
+        for (int i = 0; arg[i] != '\0'; i++) {
+            if (arg[i] == ' ') {
+                arg[i] = '\0';        // Null-terminate the filename here
+                content = &arg[i + 1]; // Content starts at the next character
+                break;
             }
         }
-    }
-    else if (kstrcmp(input, "LS") == 0) {
-        kprintf_unsync("RAMFS Contents:\n");
-        for(int i = 0; i < 32; i++) {
-            if(fs_is_active(i)) {
-                kprintf_unsync("- %s \t [%d bytes]\n", fs_get_name(i), fs_get_size(i));
-            }
+
+        // 2. Validate that we have both a name and something to write
+        if (filename && content && kstrlen(content) > 0) {
+            fat_write_file(filename, content);
+        } else {
+            kprintf_unsync("Usage: WRITE <filename> <text content>\n");
         }
+    } else {
+        kprintf_unsync("Usage: WRITE <filename> <text content>\n");
     }
-    else if (kstrcmp(input, "WRITE") == 0) {
-        if (arg) {
-            char* filename = arg;
-            char* content = 0;
-            for (int i = 0; arg[i] != '\0'; i++) {
-                if (arg[i] == ' ') {
-                    arg[i] = '\0';
-                    content = &arg[i + 1];
-                    break;
-                }
-            }
-            if (content) {
-                kcreate_file(filename, content);
-                kprintf_unsync("File '%s' saved.\n", filename);
-            } else {
-                kprintf_unsync("Usage: WRITE [filename] [text]\n");
-            }
-        }
-    }
+} 
     else if (kstrcmp(input, "PS") == 0) {
         kprintf_unsync("TID   NAME         STATE\n");
         for (int i = 0; i < MAX_TASKS; i++) {

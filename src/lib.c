@@ -232,36 +232,57 @@ void hexdump(void* ptr, int size) {
     unsigned char* data = (unsigned char*)ptr;
     
     for (int i = 0; i < size; i++) {
-        // 1. Hex Part
+        // 1. Print Hex
         unsigned char b = data[i];
-        kprintf("0x");
         if (b < 0x10) kprintf("0");
         kprintf("%x ", b);
 
-        // 2. ASCII Sidebar logic (Every 8 bytes)
+        // 2. Trigger Sidebar every 8 bytes
         if ((i + 1) % 8 == 0) {
             kprintf(" | ");
             for (int j = i - 7; j <= i; j++) {
-                unsigned char c = data[j];
-                // Only print printable ASCII (32 is space, 126 is ~)
-                if (c >= 32 && c <= 126) {
-                    // Assuming your kprintf supports %c
-                    kprintf("%c", c);
-                } else {
-                    kprintf("."); // Non-printable
-                }
+                char c = data[j];
+                if (c >= 32 && c <= 126) kprintf("%c", c);
+                else kprintf(".");
             }
             kprintf("\n");
         }
     }
-    // Handle the case where size isn't a multiple of 8
-    if (size % 8 != 0) {
+
+    // 3. FIX: Handle the leftovers!
+    int leftovers = size % 8;
+    if (leftovers != 0) {
+        // Pad the hex area with spaces so the sidebar aligns correctly
+        for (int i = 0; i < (8 - leftovers); i++) {
+            kprintf("   "); // 3 spaces per missing hex byte (0x + space)
+        }
+
+        kprintf(" | ");
+        // Print the remaining characters
+        for (int i = size - leftovers; i < size; i++) {
+            char c = data[i];
+            if (c >= 32 && c <= 126) kprintf("%c", c);
+            else kprintf(".");
+        }
         kprintf("\n");
     }
 }
+
 void sleep(int ms) {
     uint32_t end = system_ticks + (ms / (1000 / timer_frequency));
     while (system_ticks < end) {
         __asm__ volatile("hlt"); // Wait for next interrupt
     }
+}
+
+int kstrcasecmp(const char* s1, const char* s2) {
+    while (*s1 && *s2) {
+        char c1 = *s1;
+        char c2 = *s2;
+        if (c1 >= 'a' && c1 <= 'z') c1 -= 32;
+        if (c2 >= 'a' && c2 <= 'z') c2 -= 32;
+        if (c1 != c2) return c1 - c2;
+        s1++; s2++;
+    }
+    return *s1 - *s2;
 }

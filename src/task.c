@@ -32,6 +32,7 @@ void shell_task() {
             if (idx > 0) {
                 execute_command(line); 
             }
+            //vesa_updating = 0; 
             idx = 0;
             VESA_print("> ", COLOR_YELLOW);
         } 

@@ -9,6 +9,8 @@
 #include "paging.h"
 #include "kheap.h"
 #include "vesa.h"
+#include "fat.h"
+
 // External references for memory and info
 extern char end;
 extern int system_ticks;
@@ -32,6 +34,7 @@ void kmain(uint32_t magic, struct multiboot_info* mbi) {
     VESA_init(mbi);
     timer_init(100);  
 
+    fat_init();
     // 4. Filesystem & Tasks
     init_fs();
     init_multitasking(); 

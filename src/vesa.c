@@ -225,3 +225,37 @@ void VESA_clear_region(int x, int y, int w, int h) {
 
     vesa_dirty = 1; 
 }
+void kputc(char c) {
+    if (!boot_info) return;
+
+    // Handle Newline
+    if (c == '\n') {
+        vesa_cursor_x = 0;
+        vesa_cursor_y += 10; // Match your 10px line height in VESA_print
+        return;
+    }
+
+    // Handle Carriage Return
+    if (c == '\r') {
+        vesa_cursor_x = 0;
+        return;
+    }
+
+    // Wrap-around if we hit the edge of the screen
+    if (vesa_cursor_x + 8 >= (int)screen_width) {
+        vesa_cursor_x = 0;
+        vesa_cursor_y += 10;
+    }
+
+    // Check for scrolling
+    if (vesa_cursor_y > (int)boot_info->framebuffer_height - 20) {
+        VESA_scroll();
+    }
+
+    // Draw the actual character
+    // Using 0xFFFFFF (White) as default, or pass a global theme color
+    VESA_draw_char(c, vesa_cursor_x, vesa_cursor_y, 0xFFFFFF);
+    
+    // Advance cursor
+    vesa_cursor_x += 8;
+}
