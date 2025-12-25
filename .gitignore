@@ -1,3 +1,2 @@
-*.o
-*.iso
-isodir/
+build/
+bin/
