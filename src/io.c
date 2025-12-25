@@ -50,9 +50,12 @@ char keyboard_getchar() {
         }
 
         // 2. If we HAVE focus, check if there is a key waiting
-        if (has_key_in_buffer()) {
-            return get_key_from_buffer();
-        }
+       if (has_key_in_buffer()) {
+        asm volatile("cli"); // Disable interrupts
+        char c = get_key_from_buffer();
+        asm volatile("sti"); // Enable interrupts
+        return c;
+      }
 
         // 3. No key? Yield to let other tasks (like the Spinner) run
         yield();

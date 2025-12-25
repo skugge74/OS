@@ -24,18 +24,25 @@ KERNEL_ISO = $(BINDIR)/myos.iso
 
 all: prepare $(KERNEL_ISO)
 
-
-disk:
-	# Create a 10MB empty file
+disk.img:
+	@echo "Creating 10MB FAT16 Disk..."
 	dd if=/dev/zero of=disk.img bs=1M count=10
-	# Format it as FAT16
 	sudo mkfs.fat -F 16 disk.img
-	# Copy your spinner.bin into it (mount it first)
-copy: disk 
-	mcopy -i disk.img test.txt ::/text.txt
+
+disk: disk.img
+	@echo "Injecting files into disk.img..."
+	# mcopy -o overwrites if it exists
+	mcopy -i disk.img test.txt ::/TEST.TXT
+
 lsdisk:
+	@echo "FAT16 Root Directory Listing:"
 	mdir -i disk.img ::/
+
+clean_disk:
+	rm -f disk.img
 	
+
+
 # Create the directories if they don't exist
 prepare:
 	@mkdir -p $(BUILDDIR)

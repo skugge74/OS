@@ -77,11 +77,11 @@ void init_fs() {
     }
     fat_touch("SPINNER.BIN");
     fat_write_file_raw("SPINNER.BIN", (const uint8_t*)spinner_code, sizeof(spinner_code));
-    kprintf_color(0x00FF00, "SPINNER.BIN created successfully!\n");
+    //kprintf_color(0x00FF00, "SPINNER.BIN created successfully!\n");
     
     fat_touch("CLOCK.BIN");
     fat_write_file_raw("CLOCK.BIN", (const uint8_t*)clock_code, sizeof(clock_code));
-    kprintf_color(0x00FF00, "CLOCK.BIN created successfully!\n");
+    //kprintf_color(0x00FF00, "CLOCK.BIN created successfully!\n");
 }
 int kcreate_file_bin(char* name, unsigned char* data, uint32_t size) {
     for (int i = 0; i < MAX_FILES; i++) {
