@@ -151,43 +151,47 @@ fat_touch("SPINNER.BIN");
 uint32_t cluster_to_lba(uint32_t cluster) {
     return ((cluster - 2) * bpb.sectors_per_cluster) + first_data_sector;
 }
-uint16_t fat_get_next_cluster(uint16_t cluster) {
-    uint8_t fat_table[512];
-    uint32_t fat_offset = cluster * 2;
-    uint32_t fat_sector = first_fat_sector + (fat_offset / 512);
-    uint32_t ent_offset = fat_offset % 512;
 
-    ide_read_sector(fat_sector, fat_table);
-    return *(uint16_t*)&fat_table[ent_offset];
-}
 
 void* fat_load_file(struct fat_dir_entry* entry) {
     if (entry->size == 0) return NULL;
 
-    // ALWAYS allocate multiples of 512 for IDE safety
-    uint32_t alloc_size = ((entry->size + 511) / 512) * 512 + 32;
-    uint8_t* buffer = kmalloc(alloc_size);
-    
+    // 1. Allocate the full buffer (aligned to 512 for IDE safety)
+    uint32_t alloc_size = ((entry->size + 511) / 512) * 512;
+    uint8_t* buffer = (uint8_t*)kmalloc(alloc_size);
     if (!buffer) return NULL;
 
     uint16_t cluster = entry->first_cluster_low;
-    uint32_t total_sectors = (entry->size + 511) / 512;
-    uint32_t sectors_read = 0;
+    uint32_t bytes_remaining = entry->size;
+    uint32_t buffer_offset = 0;
 
-    while (cluster != 0 && cluster < 0xFFF8 && (sectors_read < total_sectors)) {
+    // 2. Follow the FAT Chain
+    // 0xFFF8 to 0xFFFF are End of File markers
+    while (cluster > 1 && cluster < 0xFFF8) {
         uint32_t lba = cluster_to_lba(cluster);
         
+        // Read the entire cluster (usually 1 or more sectors)
         for (int i = 0; i < bpb.sectors_per_cluster; i++) {
-            // Read into the buffer with proper sector offsets
-            ide_read_sector(lba + i, buffer + (sectors_read * 512));
-            sectors_read++;
+            uint32_t to_read = (bytes_remaining > 512) ? 512 : bytes_remaining;
             
-            if (sectors_read >= total_sectors) {
-                return (void*)buffer; 
-            }
+            // Temporary static buffer to keep the read safe from heap/stack noise
+            static uint8_t tmp_sector[512]; 
+            ide_read_sector(lba + i, tmp_sector);
+            
+            kmemcpy(buffer + buffer_offset, tmp_sector, to_read);
+            
+            buffer_offset += to_read;
+            bytes_remaining -= to_read;
+            
+            if (bytes_remaining == 0) break;
         }
+
+        if (bytes_remaining == 0) break;
+
+        // 3. Look up the NEXT cluster in the FAT table
         cluster = fat_get_next_cluster(cluster);
     }
+
     return (void*)buffer;
 }
 
@@ -984,3 +988,13 @@ void ide_read_sector(uint32_t lba, uint8_t* buffer) {
         ptr[i] = inw(IDE_PRIMARY_DATA);
     }
 }
+uint16_t fat_get_next_cluster(uint16_t cluster) {
+    static uint8_t fat_sector_buffer[512];
+    uint32_t fat_offset = cluster * 2; // Each entry is 2 bytes
+    uint32_t lba = bpb.reserved_sector_count + (fat_offset / 512);
+    uint32_t entry_offset = fat_offset % 512;
+
+    ide_read_sector(lba, fat_sector_buffer);
+    return *(uint16_t*)&fat_sector_buffer[entry_offset];
+}
+

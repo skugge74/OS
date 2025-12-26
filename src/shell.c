@@ -5,7 +5,6 @@
 #include "idt.h"
 #include "pmm.h"
 #include "task.h"
-#include "fs.h" 
 #include "kheap.h" 
 #include "idt.h"
 #include "fat.h"
@@ -55,12 +54,23 @@ else if (kstrcmp(input, "CAT") == 0) {
         if (file && !(file->attr & 0x10)) {
             char* buffer = (char*)fat_load_file(file);
             if (buffer) {
-                // Print the file content
-                kprintf_unsync("%s\n", buffer);
-                kfree(buffer); // Clean up memory!
+                // Use a loop instead of %s to avoid "runaway" printing
+                for (uint32_t i = 0; i < file->size; i++) {
+                    // Filter non-printable chars if you want a clean view
+                    char c = buffer[i];
+                    if (c == '\n' || (c >= 32 && c <= 126)) {
+                        kputc(c);
+                    } else if (c == '\r') {
+                        // Ignore carriage returns or handle them
+                    } else {
+                        kputc('.'); // Represent binary as dots
+                    }
+                }
+                kputc('\n');
+                kfree(buffer);
             }
         } else {
-            kprintf_unsync("File not found.\n");
+            kprintf_unsync("File '%s' not found or is a directory.\n", arg);
         }
     }
 }

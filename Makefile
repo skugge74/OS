@@ -33,7 +33,9 @@ disk: disk.img
 	@echo "Injecting files into disk.img..."
 	# mcopy -o overwrites if it exists
 	mcopy -i disk.img test.txt ::/TEST.TXT
-
+	# Create a 2KB dummy file on your host
+	python3 -c "print('A' * 512 + 'B' * 512)" > LARGE.TXT
+	mcopy -i disk.img LARGE.TXT ::/LARGE.TXT
 lsdisk:
 	@echo "FAT16 Root Directory Listing:"
 	mdir -i disk.img ::/
