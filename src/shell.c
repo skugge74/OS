@@ -8,6 +8,7 @@
 #include "kheap.h" 
 #include "idt.h"
 #include "fat.h"
+#include "KED.h"
 
 extern int vesa_updating;
 extern uint32_t system_ticks;
@@ -72,6 +73,13 @@ else if (kstrcmp(input, "CAT") == 0) {
         } else {
             kprintf_unsync("File '%s' not found or is a directory.\n", arg);
         }
+    }
+}
+else if (kstrcmp(input, "KED") == 0) {
+    if (arg) {
+        run_editor(arg);
+    } else {
+        kprintf_unsync("Usage: KED filename.txt\n");
     }
 }
 else if (kstrcmp(input, "RUN_TEST") == 0) {

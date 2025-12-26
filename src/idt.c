@@ -12,7 +12,7 @@ volatile uint32_t system_ticks = 0;
 struct idt_entry idt[256];
 struct idt_ptr idtp;
 extern void isr128_stub();
-int shift_state = 0; // Add this line to idt.c
+
 char *exception_messages[] = {
     "Division By Zero",
     "Debug",
@@ -69,33 +69,16 @@ extern void irq1_handler(); // The assembly function
 extern char buffer[128];
 extern int buffer_idx;
 extern int shift_state;
-
+extern int ctrl_state;
 
 char kbd_buffer[KEYBOARD_BUFFER_SIZE];
 int kbd_head = 0;
 int kbd_tail = 0;
 
-void irq_handler() {
-    uint8_t scancode = inb(0x60);
 
-    if (scancode == 0x2A || scancode == 0x36) {
-        shift_state = 1;
-    } else if (scancode == 0xAA || scancode == 0xB6) {
-        shift_state = 0;
-    } 
-    else if (!(scancode & 0x80)) {
-        char c = scancode_to_ascii(scancode, shift_state);
-        if (c != 0) {
-            // Push into buffer
-            int next = (kbd_head + 1) % KEYBOARD_BUFFER_SIZE;
-            if (next != kbd_tail) { // Check if buffer is full
-                kbd_buffer[kbd_head] = c;
-                kbd_head = next;
-            }
-        }
-    }
-    outb(0x20, 0x20);
-}
+int shift_state = 0;
+int ctrl_state = 0;
+int alt_state = 0;
 
 void pic_remap() {
     outb(0x20, 0x11); // Initialize Master PIC
@@ -208,31 +191,40 @@ void timer_handler(struct registers *regs) {
 static int shift_pressed = 0;
 
 void keyboard_handler(struct registers *regs) {
-    (void)regs; // Silences the 'unused parameter' warning
-    
+    (void)regs; // Silence unused warning
     uint8_t scancode = inb(0x60);
 
-    // Check for Shift Key Press (Make codes)
-    if (scancode == 0x2A || scancode == 0x36) {
-        shift_pressed = 1;
-    }
-    // Check for Shift Key Release (Break codes: scancode + 0x80)
-    else if (scancode == 0xAA || scancode == 0xB6) {
-        shift_pressed = 0;
-    }
-    // Process actual key presses
+    // 1. Update states IMMEDIATELY
+    if (scancode == 0x1D) {
+        ctrl_state = 1;
+    } else if (scancode == 0x9D) {
+        ctrl_state = 0;
+    } else if (scancode == 0x2A || scancode == 0x36) {
+        shift_state = 1;
+    } else if (scancode == 0xAA || scancode == 0xB6) {
+        shift_state = 0;
+    } 
+    // 2. Process Actual Key Presses
     else if (!(scancode & 0x80)) {
-        // Pass both the scancode and the shift state
-        char c = scancode_to_ascii(scancode, shift_pressed);
+        char c = scancode_to_ascii(scancode, shift_state);
         
-        if (c > 0) {
+        if (c != 0) {
+            if (ctrl_state) {
+                if (c == 's' || c == 'S') {
+                    c = 19; // DC3
+                    //VESA_print_at("CTRL+S DETECTED", 100, 100, 0x00FF00);
+                } else if (c == 'q' || c == 'Q') {
+                    c = 17; // DC1
+                    //VESA_print_at("CTRL+Q DETECTED", 100, 120, 0xFF0000);
+                }
+            }
             keyboard_push_char(c); 
         }
     }
 
-    // Tell the PIC we are done
     outb(0x20, 0x20);
 }
+
 void syscall_handler(struct registers *regs) {
     if (regs->eax == 1) { // Print Char
         char c = (char)regs->ebx;

@@ -1,9 +1,5 @@
 #include "io.h"
 #include "task.h"
-// Tell the compiler these are defined in idt.c
-extern char kbd_buffer[KEYBOARD_BUFFER_SIZE];
-extern int kbd_head;
-extern int kbd_tail;
 // A simple circular buffer for the keyboard
 static char key_buffer[256];
 static int head = 0;
