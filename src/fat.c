@@ -693,60 +693,70 @@ void fat_hexdump_file(const char* filename) {
 void fat_write_file(const char* filename, const char* data) {
     if (!filename || !data) return;
 
-    // 1. Calculate length manually
-    uint32_t len = 0;
-    while(data[len] != '\0' && len < 512) len++;
-    kprintf("DEBUG: Data length to write: %d\n", len);
-
-    // 2. Find the entry (We need to keep the LBA and index)
+    uint32_t total_size = kstrlen(data);
     uint32_t dir_lba = get_current_dir_lba();
-    ide_read_sector(dir_lba, global_fat_buf);
     
+    // 1. Find the file in the directory
+    ide_read_sector(dir_lba, global_fat_buf);
     struct fat_dir_entry* entries = (struct fat_dir_entry*)global_fat_buf;
     int slot = -1;
-
     for (int i = 0; i < 16; i++) {
         if (fat_compare_name(filename, (char*)entries[i].name, (char*)entries[i].ext)) {
             slot = i;
             break;
         }
     }
+    if (slot == -1) return;
 
-    if (slot == -1) {
-        kprintf("DEBUG: File %s not found in LBA %x\n", filename, dir_lba);
-        return;
+    // 2. Initial Cluster Setup
+    uint16_t current_cluster = entries[slot].first_cluster_low;
+    if (current_cluster == 0) {
+        current_cluster = fat_find_free_cluster();
+        if (current_cluster == 0xFFFF) return;
+        fat_update_table(current_cluster, 0xFFFF);
+        entries[slot].first_cluster_low = current_cluster;
     }
 
-    // 3. Get or Allocate a Cluster
-    uint16_t cluster = entries[slot].first_cluster_low;
-    if (cluster == 0) {
-        cluster = fat_find_free_cluster();
-        if (cluster == 0xFFFF) { kprintf("DEBUG: Disk Full\n"); return; }
-        fat_update_table(cluster, 0xFFFF);
-        entries[slot].first_cluster_low = cluster;
-        //kprintf("DEBUG: Allocated new cluster: %d\n", cluster);
-    }
-
-    // 4. Update the Directory Entry SIZE in our buffer
-    entries[slot].size = len;
-    
-    // 5. STEP ONE: Write the Directory Entry back to disk
-    // If you skip this, 'ls' will always show 0 bytes!
+    // 3. Update Directory Entry Size immediately
+    entries[slot].size = total_size;
     ide_write_sector(dir_lba, global_fat_buf);
-    //kprintf("DEBUG: Directory entry updated at LBA %x\n", dir_lba);
 
-    // 6. STEP TWO: Write the Data to the File Cluster
-    // We clear the buffer first
-    kmemset(global_fat_buf, 0, 512 / 4);
-    kmemcpy(global_fat_buf, data, len);
+    // 4. The Write Loop
+    uint32_t bytes_written = 0;
+    while (bytes_written < total_size) {
+        // Clear local buffer and copy up to 512 bytes
+        kmemset(raw_io_buffer, 0, 512 / 4);
+        uint32_t chunk = (total_size - bytes_written > 512) ? 512 : (total_size - bytes_written);
+        kmemcpy(raw_io_buffer, data + bytes_written, chunk);
 
-    uint32_t data_lba = cluster_to_lba(cluster);
-    ide_write_sector(data_lba, global_fat_buf);
-    //kprintf("DEBUG: Data written to LBA %x\n", data_lba);
+        // Determine which sector within the cluster we are writing to
+        uint32_t sector_in_cluster = (bytes_written / 512) % bpb.sectors_per_cluster;
+        uint32_t data_lba = cluster_to_lba(current_cluster) + sector_in_cluster;
+        
+        ide_write_sector(data_lba, raw_io_buffer);
+        bytes_written += chunk;
 
-    kprintf("DONE: Wrote '%s' to %s\n", data, filename);
+        // 5. Chain Expansion: If we still have data and just finished a cluster
+        if (bytes_written < total_size && (bytes_written % (bpb.sectors_per_cluster * 512) == 0)) {
+            uint16_t next = fat_get_next_cluster(current_cluster);
+            
+            // If the current chain ends but we need more space, grow it
+            if (next >= 0xFFF8 || next == 0) { 
+                next = fat_find_free_cluster();
+                if (next == 0xFFFF) {
+                    kprintf_unsync("Error: Disk Full\n");
+                    return;
+                }
+                // LINK the current cluster to the new one
+                fat_update_table(current_cluster, next);
+                // Mark the NEW cluster as the End of Chain
+                fat_update_table(next, 0xFFFF);
+            }
+            current_cluster = next;
+        }
+    }
+    kprintf_unsync("Saved %d bytes to %s\n", total_size, filename);
 }
-
 
 void fat_rm(const char* filename) {
     uint8_t buffer[512];

@@ -67,6 +67,17 @@ void run_editor(const char* filename) {
                 fat_write_file(filename, text_buffer);
                 break;
             }
+            if (c == 16) { 
+                uint32_t paste_size = 512;
+                // Check if we have room in the 4096 byte buffer
+                if (cursor_pos + paste_size < 4094) {
+                    for (uint32_t i = 0; i < paste_size; i++) {
+                        text_buffer[cursor_pos++] = 'H';
+                    }
+                    text_buffer[cursor_pos] = '\0'; // Ensure null termination
+                }
+                continue; // Skip the standard character processing
+            }
             if (c == '\b' && cursor_pos > 0) {
                 text_buffer[--cursor_pos] = '\0';
             } 

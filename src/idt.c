@@ -216,6 +216,9 @@ void keyboard_handler(struct registers *regs) {
                 } else if (c == 'q' || c == 'Q') {
                     c = 17; // DC1
                     //VESA_print_at("CTRL+Q DETECTED", 100, 120, 0xFF0000);
+                }else if (c == 'p' || c == 'P') {
+                    c = 16; 
+                    //VESA_print_at("CTRL+P DETECTED", 100, 120, 0xFF0000);
                 }
             }
             keyboard_push_char(c); 
