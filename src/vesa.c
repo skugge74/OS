@@ -259,3 +259,28 @@ void kputc(char c) {
     // Advance cursor
     vesa_cursor_x += 8;
 }
+void VESA_draw_rect(int x, int y, int w, int h, uint32_t color) {
+    int vesa_width = boot_info->framebuffer_width;
+    int vesa_height = boot_info->framebuffer_height;
+    int vesa_addr = boot_info->framebuffer_addr;
+    // 1. Boundary Checks (Prevent kernel panic from drawing off-screen)
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > vesa_width) w = vesa_width - x;
+    if (y + h > vesa_height) h = vesa_height - y;
+    if (w <= 0 || h <= 0) return;
+
+    // 2. Calculate initial pointer to the backbuffer
+    // Assuming 32-bit (4 bytes) per pixel
+    uint32_t* backbuffer = (uint32_t*)vesa_addr;
+    
+    for (int i = 0; i < h; i++) {
+        // Find the start of the current row
+        uint32_t* row_ptr = backbuffer + ((y + i) * vesa_width) + x;
+        
+        // Use your 32-bit kmemset to fill the row
+        // Note: n is the number of 32-bit units (pixels)
+        kmemset(row_ptr, color, w);
+    }
+}
+

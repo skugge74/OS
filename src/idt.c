@@ -228,14 +228,23 @@ void keyboard_handler(struct registers *regs) {
 }
 
 void syscall_handler(struct registers *regs) {
-    if (regs->eax == 1) { // Print Char
-        char c = (char)regs->ebx;
-        int x = regs->ecx;
-        int y = regs->edx;
-        
-        // Use your VESA function to draw it!
-        VESA_draw_char(c, x, y, 0xFFFFFF); 
-    } 
+    if (regs->eax == 1) { // DRAW_CHAR
+    char c = (char)regs->ebx;
+    int x = regs->ecx;
+    int y = regs->edx;
+    int id = current_task_idx;
+
+    // Expand bounds to include this new character
+    if (x < task_list[id].first_x) task_list[id].first_x = x;
+    if (y < task_list[id].first_y) task_list[id].first_y = y;
+    
+    // Check the right and bottom edges (8 pixels for a standard font)
+    if (x + 8 > task_list[id].last_x) task_list[id].last_x = x + 8;
+    if (y + 8 > task_list[id].last_y) task_list[id].last_y = y + 8;
+
+    task_list[id].has_drawn = 1;
+    VESA_draw_char(c, x, y, 0xFFFFFF); 
+}
     else if (regs->eax == 2) { // Get Ticks
         regs->eax = system_ticks; 
     }
@@ -282,7 +291,27 @@ else if (regs->eax == 3) { // Syscall 3: Sleep(ms)
   else if (regs->eax == 4) { // Syscall 4: Exit/Terminate
     kprintf_unsync("Task %d exited.\n", current_task_idx);
     task_list[current_task_idx].state = 0; // Set to DEAD
-    
+    if (task_list[current_task_idx].has_drawn) {
+        int w = task_list[current_task_idx].last_x - task_list[current_task_idx].first_x;
+        int h = task_list[current_task_idx].last_y - task_list[current_task_idx].first_y;
+        
+        // Safety check to prevent massive unsigned underflow clears
+        if (w > 0 && w < 2000 && h > 0 && h < 2000) {
+            VESA_clear_region(task_list[current_task_idx].first_x, task_list[current_task_idx].first_y, w, h);
+            VESA_flip(); 
+        }
+    }
+    // --- CLEANUP STACK ---
+    if (task_list[current_task_idx].stack_ptr != NULL) {
+        kfree(task_list[current_task_idx].stack_ptr);
+        task_list[current_task_idx].stack_ptr = NULL;
+    }
+
+    // --- CLEANUP CODE (The missing 4KB!) ---
+    if (task_list[current_task_idx].code_ptr != NULL) {
+        kfree(task_list[current_task_idx].code_ptr);
+        task_list[current_task_idx].code_ptr = NULL; 
+    }
     // Immediately switch to another task
     int next_task = (current_task_idx + 1) % MAX_TASKS;
     while(task_list[next_task].state != 1) next_task = (next_task + 1) % MAX_TASKS;
@@ -290,6 +319,33 @@ else if (regs->eax == 3) { // Syscall 3: Sleep(ms)
     current_task_idx = next_task;
     next_stack_ptr = task_list[next_task].esp;
   }
+else if (regs->eax == 5) { // Syscall 5: Clear Screen
+    VESA_clear();
+    // It's good practice to also reset the kernel's bounding box 
+    // because the screen is now empty.
+    task_list[current_task_idx].first_x = 0;
+    task_list[current_task_idx].first_y = 0;
+    task_list[current_task_idx].last_x = 0;
+    task_list[current_task_idx].last_y = 0;
+    task_list[current_task_idx].has_drawn = 0;
+}
+else if (regs->eax == 6) { // DRAW_RECT
+    int x = regs->ebx;
+    int y = regs->ecx;
+    int w = regs->edx;
+    int h = regs->esi;          // We'll use ESI for height
+    uint32_t color = regs->edi; // We'll use EDI for color
+
+    // Update the Task's bounding box for auto-cleanup
+    if (x < task_list[current_task_idx].first_x) task_list[current_task_idx].first_x = x;
+    if (y < task_list[current_task_idx].first_y) task_list[current_task_idx].first_y = y;
+    if (x + w > task_list[current_task_idx].last_x) task_list[current_task_idx].last_x = x + w;
+    if (y + h > task_list[current_task_idx].last_y) task_list[current_task_idx].last_y = y + h;
+
+    task_list[current_task_idx].has_drawn = 1;
+    
+    VESA_draw_rect(x, y, w, h, color);
+}
 }
 
 // Helper to emit a MOV instruction for a specific register
@@ -354,4 +410,31 @@ void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos) {
     else if (kstrcmp(cmd, "HLT") == 0) {
         out_buf[(*pos)++] = 0xF4;
     }
+else if (kstrcmp(cmd, "RECT") == 0) {
+    // Syntax: RECT x y w h color
+    char arg_str[32];
+    uint32_t x, y, w, h, color;
+
+    ptr = get_token(ptr, arg_str); x = katoi(arg_str);
+    ptr = get_token(ptr, arg_str); y = katoi(arg_str);
+    ptr = get_token(ptr, arg_str); w = katoi(arg_str);
+    ptr = get_token(ptr, arg_str); h = katoi(arg_str);
+    ptr = get_token(ptr, arg_str); color = katoi(arg_str);
+
+    emit_mov(0xB8, 6, out_buf, pos);     // EAX = 6
+    emit_mov(0xBB, x, out_buf, pos);     // EBX = x
+    emit_mov(0xB9, y, out_buf, pos);     // ECX = y
+    emit_mov(0xBA, w, out_buf, pos);     // EDX = w
+    emit_mov(0xBE, h, out_buf, pos);     // ESI = h (Opcode 0xBE)
+    emit_mov(0xBF, color, out_buf, pos); // EDI = color (Opcode 0xBF)
+    
+    out_buf[(*pos)++] = 0xCD; // INT 0x80
+    out_buf[(*pos)++] = 0x80;
+}
+else if (kstrcmp(cmd, "CLEAR") == 0) {
+    // We only need to set EAX to 5 and trigger the interrupt
+    emit_mov(0xB8, 5, out_buf, pos); // MOV EAX, 5
+    out_buf[(*pos)++] = 0xCD;        // INT 0x80
+    out_buf[(*pos)++] = 0x80;
+}
 }
