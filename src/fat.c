@@ -145,6 +145,7 @@ fat_touch("SPINNER.BIN");
     fat_touch("CLOCK.BIN");
     fat_write_file_raw("CLOCK.BIN", (const uint8_t*)clock_code, sizeof(clock_code));
     //kprintf_color(0x00FF00, "CLOCK.BIN created successfully!\n");
+    test_multi_sector_write();
 }
 
 // Helper to convert Cluster to LBA
@@ -928,6 +929,33 @@ uint32_t fat_get_cluster_from_path(const char* path) {
     return walk_cluster;
 }
 
+void ide_read_sector(uint32_t lba, uint8_t* buffer) {
+    outb(IDE_PRIMARY_DRIVE_SEL, 0xE0 | ((lba >> 24) & 0x0F));
+    outb(IDE_PRIMARY_SECCOUNT, 1);
+    outb(IDE_PRIMARY_LBA_LOW, (uint8_t)lba);
+    outb(IDE_PRIMARY_LBA_MID, (uint8_t)(lba >> 8));
+    outb(IDE_PRIMARY_LBA_HIGH, (uint8_t)(lba >> 16));
+    outb(IDE_PRIMARY_COMMAND, 0x20); // 0x20 is "Read Sectors"
+
+    // Wait for the drive to be ready
+    while (!(inb(IDE_PRIMARY_COMMAND) & 0x08));
+
+    // Read 256 16-bit words (512 bytes total)
+    uint16_t* ptr = (uint16_t*)buffer;
+    for (int i = 0; i < 256; i++) {
+        ptr[i] = inw(IDE_PRIMARY_DATA);
+    }
+}
+uint16_t fat_get_next_cluster(uint16_t cluster) {
+    static uint8_t fat_sector_buffer[512];
+    uint32_t fat_offset = cluster * 2; // Each entry is 2 bytes
+    uint32_t lba = bpb.reserved_sector_count + (fat_offset / 512);
+    uint32_t entry_offset = fat_offset % 512;
+
+    ide_read_sector(lba, fat_sector_buffer);
+    return *(uint16_t*)&fat_sector_buffer[entry_offset];
+}
+/*
 void fat_write_file_raw(const char* filename, const uint8_t* data, uint32_t size) {
     if (!filename || !data || size == 0) return;
 
@@ -982,30 +1010,129 @@ void fat_write_file_raw(const char* filename, const uint8_t* data, uint32_t size
 
     kprintf_color(0x00FF00, "Successfully wrote RAW %d bytes to %s\n", bytes_to_copy, filename);
 }
-void ide_read_sector(uint32_t lba, uint8_t* buffer) {
-    outb(IDE_PRIMARY_DRIVE_SEL, 0xE0 | ((lba >> 24) & 0x0F));
-    outb(IDE_PRIMARY_SECCOUNT, 1);
-    outb(IDE_PRIMARY_LBA_LOW, (uint8_t)lba);
-    outb(IDE_PRIMARY_LBA_MID, (uint8_t)(lba >> 8));
-    outb(IDE_PRIMARY_LBA_HIGH, (uint8_t)(lba >> 16));
-    outb(IDE_PRIMARY_COMMAND, 0x20); // 0x20 is "Read Sectors"
+*/
+void fat_write_file_raw(const char* filename, const unsigned char* data, size_t total_size) {
+    if (!filename || !data || total_size == 0) return;
 
-    // Wait for the drive to be ready
-    while (!(inb(IDE_PRIMARY_COMMAND) & 0x08));
-
-    // Read 256 16-bit words (512 bytes total)
-    uint16_t* ptr = (uint16_t*)buffer;
-    for (int i = 0; i < 256; i++) {
-        ptr[i] = inw(IDE_PRIMARY_DATA);
+    // 1. Allocate Directory Buffer
+    uint8_t* dir_buf = (uint8_t*)kmalloc(512);
+    if (!dir_buf) {
+        kprintf_unsync("Write Error: Could not allocate dir_buf\n");
+        return;
     }
-}
-uint16_t fat_get_next_cluster(uint16_t cluster) {
-    static uint8_t fat_sector_buffer[512];
-    uint32_t fat_offset = cluster * 2; // Each entry is 2 bytes
-    uint32_t lba = bpb.reserved_sector_count + (fat_offset / 512);
-    uint32_t entry_offset = fat_offset % 512;
 
-    ide_read_sector(lba, fat_sector_buffer);
-    return *(uint16_t*)&fat_sector_buffer[entry_offset];
-}
+    uint32_t dir_lba = get_current_dir_lba();
+    ide_read_sector(dir_lba, dir_buf);
+    struct fat_dir_entry* entries = (struct fat_dir_entry*)dir_buf;
+    
+    int slot = -1;
+    for (int i = 0; i < 16; i++) {
+        if (fat_compare_name(filename, (char*)entries[i].name, (char*)entries[i].ext)) {
+            slot = i;
+            break;
+        }
+    }
 
+    if (slot == -1) {
+        kfree(dir_buf);
+        return;
+    }
+
+    // 2. Initial Cluster Setup
+    uint16_t current_cluster = entries[slot].first_cluster_low;
+    if (current_cluster < 2) { 
+        current_cluster = fat_find_free_cluster();
+        if (current_cluster == 0xFFFF) {
+            kfree(dir_buf);
+            return;
+        }
+        entries[slot].first_cluster_low = current_cluster;
+        fat_update_table(current_cluster, 0xFFFF);
+    }
+
+    // 3. Update Size and Commit Directory Entry
+    entries[slot].size = total_size;
+    ide_write_sector(dir_lba, dir_buf);
+    
+    // We are done with the directory buffer, free it now to keep heap clean
+    kfree(dir_buf);
+
+    // 4. Allocate Sector Buffer for Data
+    uint8_t* sector_scratch = (uint8_t*)kmalloc(512);
+    if (!sector_scratch) {
+        kprintf_unsync("Write Error: Could not allocate sector_scratch\n");
+        return; 
+    }
+
+    uint32_t bytes_written = 0;
+    while (bytes_written < total_size) {
+        // Prepare the 512-byte chunk
+        kmemset(sector_scratch, 0, 128); // 128 * 4 bytes
+        uint32_t chunk = (total_size - bytes_written > 512) ? 512 : (total_size - bytes_written);
+        kmemcpy(sector_scratch, data + bytes_written, chunk);
+
+        // LBA Math
+        uint32_t sector_in_cluster = (bytes_written / 512) % bpb.sectors_per_cluster;
+        uint32_t data_lba = cluster_to_lba(current_cluster) + sector_in_cluster;
+        
+        ide_write_sector(data_lba, sector_scratch);
+        bytes_written += chunk;
+
+        // 5. Chain Expansion
+        if (bytes_written < total_size && (bytes_written % (bpb.sectors_per_cluster * 512) == 0)) {
+            uint16_t next = fat_get_next_cluster(current_cluster);
+            
+            if (next >= 0xFFF8 || next < 2) { 
+                next = fat_find_free_cluster();
+                if (next == 0xFFFF) {
+                    kprintf_unsync("Error: Disk Full\n");
+                    kfree(sector_scratch); // Free before emergency exit
+                    return;
+                }
+                fat_update_table(current_cluster, next);
+                fat_update_table(next, 0xFFFF);
+            }
+            current_cluster = next;
+        }
+    }
+
+    // Final Cleanup
+    kfree(sector_scratch);
+    kprintf_unsync("Saved %d bytes to %s via Heap\n", total_size, filename);
+}
+void test_multi_sector_write() {
+    uint32_t file_size = 2048; // Exactly 4 sectors
+    uint8_t* test_buffer = (uint8_t*)kmalloc(file_size);
+
+    if (!test_buffer) {
+        kprintf_unsync("TEST Error: Could not allocate test buffer\n");
+        return;
+    }
+
+    // 1. Fill the entire buffer with NOPs (0x90)
+    kmemset(test_buffer, 0x90909090, file_size / 4);
+
+    // 2. Place the Spinner code at the very beginning (Sector 0)
+    // We copy 50 bytes (leaving out the original 2-byte short jump)
+    kmemcpy(test_buffer, spinner_code, 50);
+
+    // 3. Place a "Long Jump" at the very end (Sector 3)
+    // This jump will point back to the beginning of the file (offset 0)
+    // Opcode E9 is a relative jump with a 32-bit offset
+    uint32_t jump_instruction_idx = file_size - 5; 
+    test_buffer[jump_instruction_idx] = 0xE9;
+    
+    // Relative offset calculation: 
+    // target_address - (current_instruction_address + 5)
+    int32_t relative_offset = -(int32_t)(jump_instruction_idx + 5);
+    kmemcpy(&test_buffer[jump_instruction_idx + 1], &relative_offset, 4);
+
+    // 4. Create the file and write using the Heap-based function
+    kprintf_unsync("Creating BIGSPIN.BIN (2048 bytes)...\n");
+    fat_touch("BIGSPIN.BIN");
+    fat_write_file_raw("BIGSPIN.BIN", test_buffer, file_size);
+
+    // 5. Cleanup
+    kfree(test_buffer);
+    kprintf_unsync("Test complete. Check 'ls' and run 'BIGSPIN.BIN'\n");
+}
