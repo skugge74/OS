@@ -36,6 +36,7 @@ disk: disk.img
 	# Create a 2KB dummy file on your host
 	python3 -c "print('A' * 512 + 'B' * 512)" > LARGE.TXT
 	mcopy -i disk.img LARGE.TXT ::/LARGE.TXT
+	mcopy -i disk.img program.txt ::/PROGRAM.TXT
 lsdisk:
 	@echo "FAT16 Root Directory Listing:"
 	mdir -i disk.img ::/

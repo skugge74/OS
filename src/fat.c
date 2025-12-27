@@ -145,7 +145,7 @@ fat_touch("SPINNER.BIN");
     fat_touch("CLOCK.BIN");
     fat_write_file_raw("CLOCK.BIN", (const uint8_t*)clock_code, sizeof(clock_code));
     //kprintf_color(0x00FF00, "CLOCK.BIN created successfully!\n");
-    test_multi_sector_write();
+    //test_multi_sector_write();
 }
 
 // Helper to convert Cluster to LBA
@@ -1134,5 +1134,5 @@ void test_multi_sector_write() {
 
     // 5. Cleanup
     kfree(test_buffer);
-    kprintf_unsync("Test complete. Check 'ls' and run 'BIGSPIN.BIN'\n");
+    //kprintf_unsync("Test complete. Check 'ls' and run 'BIGSPIN.BIN'\n");
 }

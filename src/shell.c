@@ -368,6 +368,15 @@ else if (kstrcmp(input, "PWD") == 0) {
         VESA_flip();
         __asm__ volatile("div %0" :: "r"(0));
     }
+
+  else if (kstrcmp(input, "COMPILE") == 0) {
+    if (arg[0] != '\0') {
+        shell_compile(arg);
+    } else {
+        kprintf_unsync("Usage: compile <filename.txt>\n");
+    }
+}
+
     else if (input[0] != '\0') {
         kprintf_unsync("Unknown command: %s\n", input);
     }
@@ -382,5 +391,64 @@ else if (kstrcmp(input, "PWD") == 0) {
         VESA_flip();
     }
 }
+void shell_compile(const char* arg) {
+    struct fat_dir_entry* file = fat_search(arg);
+    if (!file) {
+        kprintf_unsync("Error: %s not found\n", arg);
+        return;
+    }
+
+    // 1. Load the ASCII text from disk
+    char* source_buf = (char*)fat_load_file(file);
+    
+    // 2. Allocate a buffer for the ACTUAL MACHINE CODE (binary)
+    uint8_t* binary_buf = (uint8_t*)kmalloc(4096);
+    uint32_t binary_size = 0; // This tracks ACTUAL BYTES generated
+
+    char* line = source_buf;
+    uint32_t current_pos = 0;
+
+    while (current_pos < file->size) {
+        char temp_line[128];
+        uint32_t i = 0;
+        
+        // Extract one line from the source_buf
+        while (current_pos < file->size && line[i] != '\n' && i < 127) {
+            temp_line[i] = line[i];
+            i++;
+        }
+        temp_line[i] = '\0';
+        
+        // Move our source pointers forward
+        current_pos += (i + 1);
+        line += (i + 1);
+
+        // --- THE MAGIC STEP ---
+        // assemble_line must write hex bytes into binary_buf at offset 'binary_size'
+        assemble_line(temp_line, binary_buf, &binary_size);
+    }
 
 
+    // 4. WRITE THE BINARY BUFFER, NOT THE SOURCE BUFFER
+    // 4. Generate output filename (e.g., TEST.TXT -> TEST.BIN)
+    char out_name[16];
+    int i = 0;
+    for (i = 0; i < 11 && arg[i] != '.' && arg[i] != '\0'; i++) {
+        out_name[i] = arg[i];
+    }
+    out_name[i++] = '.';
+    out_name[i++] = 'B';
+    out_name[i++] = 'I';
+    out_name[i++] = 'N';
+    out_name[i] = '\0';
+
+    // 5. Save the output
+    fat_touch(out_name);
+    fat_write_file_raw(out_name, binary_buf, binary_size);
+
+    kprintf_unsync("Compiled: %s (%d instructions/bytes)\n", out_name, binary_size);
+
+    // 6. Final Cleanup
+    kfree(source_buf);
+    kfree(binary_buf);
+}

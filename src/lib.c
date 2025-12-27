@@ -286,3 +286,13 @@ int kstrcasecmp(const char* s1, const char* s2) {
     }
     return *s1 - *s2;
 }
+const char* get_token(const char* line, char* token_out) {
+    while (*line == ' ') line++; // Skip leading spaces
+    if (*line == '\0' || *line == '\n' || *line == '\r') return NULL;
+
+    while (*line != ' ' && *line != '\0' && *line != '\n' && *line != '\r') {
+        *token_out++ = *line++;
+    }
+    *token_out = '\0';
+    return line;
+}

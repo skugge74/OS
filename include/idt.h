@@ -2,7 +2,12 @@
 #define IDT
 
 #include <stdint.h>
+#define SYS_DRAW_CHAR 1
+#define SYS_GET_TICKS 2
+#define SYS_SLEEP     3
 
+// For the Assembler, we would define these as constants:
+// .define SYS_DRAW_CHAR 1
 extern int multitasking_enabled;
 extern uint32_t timer_frequency; // Global variable to store the frequency
 struct idt_entry {
@@ -32,5 +37,6 @@ void timer_handler();
 void timer_init(uint32_t frequency);
 void keyboard_handler(struct registers *regs); 
 void syscall_handler(struct registers *regs);
-
+void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos);
+void emit_mov(uint8_t reg_code, uint32_t val, uint8_t* out_buf, uint32_t* pos);
 #endif // !IDT

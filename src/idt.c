@@ -3,7 +3,7 @@
 #include "lib.h"
 #include "task.h"
 #include "vesa.h"
-
+#include "kheap.h"
 uint32_t timer_frequency = 0; // Global variable to store the frequency
 extern struct task task_list[];
 extern int current_task_idx;
@@ -76,8 +76,8 @@ int kbd_head = 0;
 int kbd_tail = 0;
 
 
-int shift_state = 0;
 int ctrl_state = 0;
+int shift_state = 0;
 int alt_state = 0;
 
 void pic_remap() {
@@ -188,7 +188,6 @@ void timer_handler(struct registers *regs) {
     outb(0x20, 0x20);
 }
 // Track shift state globally in idt.c or io.c
-static int shift_pressed = 0;
 
 void keyboard_handler(struct registers *regs) {
     (void)regs; // Silence unused warning
@@ -279,6 +278,80 @@ else if (regs->eax == 3) { // Syscall 3: Sleep(ms)
     // 4. Perform the switch
     current_task_idx = found;
     next_stack_ptr = task_list[found].esp;
+  }
+  else if (regs->eax == 4) { // Syscall 4: Exit/Terminate
+    kprintf_unsync("Task %d exited.\n", current_task_idx);
+    task_list[current_task_idx].state = 0; // Set to DEAD
+    
+    // Immediately switch to another task
+    int next_task = (current_task_idx + 1) % MAX_TASKS;
+    while(task_list[next_task].state != 1) next_task = (next_task + 1) % MAX_TASKS;
+    
+    current_task_idx = next_task;
+    next_stack_ptr = task_list[next_task].esp;
+  }
 }
 
+// Helper to emit a MOV instruction for a specific register
+void emit_mov(uint8_t reg_code, uint32_t val, uint8_t* out_buf, uint32_t* pos) {
+    out_buf[(*pos)++] = reg_code;
+    kmemcpy(&out_buf[*pos], &val, 4);
+    *pos += 4;
+}
+
+void assemble_line(const char* line, uint8_t* out_buf, uint32_t* pos) {
+    char cmd[32];
+    char arg_str[32];
+    
+    // Get the command name
+    const char* ptr = get_token(line, cmd);
+    if (!ptr) return;
+
+    if (kstrcmp(cmd, "DRAW_CHAR") == 0) {
+        // Syntax: DRAW_CHAR <ascii> <x> <y>
+        uint32_t char_val, x, y;
+        
+        ptr = get_token(ptr, arg_str);
+        char_val = katoi(arg_str);
+        
+        ptr = get_token(ptr, arg_str);
+        x = katoi(arg_str);
+        
+        ptr = get_token(ptr, arg_str);
+        y = katoi(arg_str);
+
+        emit_mov(0xB8, 1, out_buf, pos);    // MOV EAX, 1
+        emit_mov(0xBB, char_val, out_buf, pos); // MOV EBX, char
+        emit_mov(0xB9, x, out_buf, pos);    // MOV ECX, x
+        emit_mov(0xBA, y, out_buf, pos);    // MOV EDX, y
+        
+        out_buf[(*pos)++] = 0xCD; // INT 0x80
+        out_buf[(*pos)++] = 0x80;
+    }
+    else if (kstrcmp(cmd, "GET_TICKS") == 0) {
+        emit_mov(0xB8, 2, out_buf, pos); // MOV EAX, 2
+        out_buf[(*pos)++] = 0xCD; 
+        out_buf[(*pos)++] = 0x80;
+    }
+    else if (kstrcmp(cmd, "SLEEP") == 0) {
+        uint32_t ms;
+        ptr = get_token(ptr, arg_str);
+        ms = katoi(arg_str);
+
+        emit_mov(0xB8, 3, out_buf, pos); // EAX=3
+        emit_mov(0xBB, ms, out_buf, pos); // EBX=ms
+        out_buf[(*pos)++] = 0xCD; 
+        out_buf[(*pos)++] = 0x80;
+    }
+    else if (kstrcmp(cmd, "EXIT") == 0) {
+        emit_mov(0xB8, 4, out_buf, pos); // EAX=4
+        out_buf[(*pos)++] = 0xCD; 
+        out_buf[(*pos)++] = 0x80;
+    }
+    else if (kstrcmp(cmd, "NOP") == 0) {
+        out_buf[(*pos)++] = 0x90;
+    }
+    else if (kstrcmp(cmd, "HLT") == 0) {
+        out_buf[(*pos)++] = 0xF4;
+    }
 }

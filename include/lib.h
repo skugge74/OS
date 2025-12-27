@@ -12,3 +12,4 @@ void sleep(int ms);
 int katoi(char* str);
 void kprintf_unsync(const char* format, ...); 
 int kstrcasecmp(const char* s1, const char* s2); 
+const char* get_token(const char* line, char* token_out); 
