@@ -507,66 +507,32 @@ void ide_write_sector(uint32_t lba, uint8_t* buffer) {
     while (inb(0x1F7) & 0x80);
 }
 
-
 void fat_mkdir(const char* dirname) {
-    uint8_t* dir_buf = (uint8_t*)kmalloc(512);
-    uint8_t* new_dir_sector = (uint8_t*)kmalloc(512);
+    // 1. ALLOCATION: We allocate 1024 bytes for a 512-byte need.
+    // This creates a "No Man's Land" between buffers so an IDE overrun 
+    // hits empty space instead of the next heap header.
+    uint8_t* dir_buf = (uint8_t*)kmalloc(1024);
+    uint8_t* new_dir_sector = (uint8_t*)kmalloc(1024);
 
     if (!dir_buf || !new_dir_sector) {
-        kprintf_unsync("MKDIR Error: Out of memory\n");
-        if (dir_buf) kfree(dir_buf); // Clean up if only one failed
+        kprintf_unsync("MKDIR Error: Heap collision or OOM\n");
+        if (dir_buf) kfree(dir_buf);
+        if (new_dir_sector) kfree(new_dir_sector);
         return;
     }
-    // 2. Find a free cluster for the new directory's contents
+
+    // 2. Find a free cluster
     uint16_t new_cluster = fat_find_free_cluster();
     if (new_cluster == 0xFFFF) {
         kprintf_unsync("MKDIR Error: Disk Full\n");
-        goto cleanup;
+        kfree(dir_buf);
+        kfree(new_dir_sector);
+        return;
     }
 
-    // 3. Update FAT Table: Mark new cluster as End-of-Chain (0xFFFF)
-    fat_update_table(new_cluster, 0xFFFF);
-
-    // 4. Find an empty slot in the PARENT directory
-    uint32_t parent_dir_lba = get_current_dir_lba();
-    ide_read_sector(parent_dir_lba, dir_buf);
-    struct fat_dir_entry* entries = (struct fat_dir_entry*)dir_buf;
-
-    int slot = -1;
-    for (int i = 0; i < 16; i++) {
-        // 0x00 = Never used, 0xE5 = Deleted
-        if (entries[i].name[0] == 0x00 || (unsigned char)entries[i].name[0] == 0xE5) {
-            slot = i;
-            break;
-        }
-    }
-
-    if (slot == -1) {
-        kprintf_unsync("MKDIR Error: Parent directory is full\n");
-        goto cleanup;
-    }
-
-    // 5. Create the entry in the Parent Directory
-    kmemset(&entries[slot], 0, sizeof(struct fat_dir_entry));
-    
-    for (int i = 0; i < 8; i++) entries[slot].name[i] = ' ';
-for (int i = 0; i < 3; i++) entries[slot].ext[i] = ' '; // Explicitly clear extension
-
-for (int i = 0; i < 8 && dirname[i] != '\0'; i++) {
-    char c = dirname[i];
-    if (c >= 'a' && c <= 'z') c -= 32; 
-    entries[slot].name[i] = c;
-}
-
-    entries[slot].attr = 0x10; // Directory Attribute
-    entries[slot].first_cluster_low = new_cluster;
-    entries[slot].size = 0;    // Directories report 0 size in FAT16
-
-    // Write parent directory back to disk
-    ide_write_sector(parent_dir_lba, dir_buf);
-
-    // 6. Initialize the NEW directory's cluster with "." and ".."
-    kmemset(new_dir_sector, 0, 512);
+    // 3. Initialize the NEW directory cluster (DOT and DOTDOT)
+    // We clear the buffer (using your 4-byte aligned kmemset logic)
+    kmemset(new_dir_sector, 0, 512 / 4); 
     struct fat_dir_entry* dot_entries = (struct fat_dir_entry*)new_dir_sector;
 
     // Create "." (Self)
@@ -577,18 +543,53 @@ for (int i = 0; i < 8 && dirname[i] != '\0'; i++) {
     // Create ".." (Parent)
     kmemcpy(dot_entries[1].name, "..      ", 8);
     dot_entries[1].attr = 0x10;
-    // Current cluster is the parent of the one we just made
-    dot_entries[1].first_cluster_low = (uint16_t)fat_get_current_cluster();
+    dot_entries[1].first_cluster_low = (uint16_t)current_dir_cluster;
 
-    // Write the new directory structure to its cluster on disk
+    // Write new dir to disk
     ide_write_sector(cluster_to_lba(new_cluster), new_dir_sector);
+    fat_update_table(new_cluster, 0xFFFF);
 
-    kprintf_unsync("Directory '%s' created at cluster %d\n", dirname, new_cluster);
+    // 4. Update the PARENT directory
+    uint32_t parent_dir_lba = get_current_dir_lba();
+    ide_read_sector(parent_dir_lba, dir_buf);
+    struct fat_dir_entry* entries = (struct fat_dir_entry*)dir_buf;
 
-cleanup:
+    int slot = -1;
+    for (int i = 0; i < 16; i++) {
+        if (entries[i].name[0] == 0x00 || (unsigned char)entries[i].name[0] == 0xE5) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot != -1) {
+        // Clear exactly one entry size (32 bytes / 4 = 8 longs)
+        kmemset(&entries[slot], 0, sizeof(struct fat_dir_entry) / 4);
+        
+        // Format Name (Uppercase)
+        for (int i = 0; i < 8; i++) entries[slot].name[i] = ' ';
+        for (int i = 0; i < 3; i++) entries[slot].ext[i] = ' ';
+        for (int i = 0; i < 8 && dirname[i] != '\0'; i++) {
+            char c = dirname[i];
+            if (c >= 'a' && c <= 'z') c -= 32; 
+            entries[slot].name[i] = c;
+        }
+
+        entries[slot].attr = 0x10;
+        entries[slot].first_cluster_low = new_cluster;
+        entries[slot].size = 0;
+
+        ide_write_sector(parent_dir_lba, dir_buf);
+        kprintf_unsync("Directory '%s' created.\n", dirname);
+    } else {
+        kprintf_unsync("MKDIR Error: Parent dir full\n");
+    }
+
+    // 5. CLEANUP
     kfree(dir_buf);
     kfree(new_dir_sector);
 }
+
 void fat_touch(const char* filename) {
     uint8_t* dir_buf = (uint8_t*)kmalloc(512);
     if (!dir_buf) return;

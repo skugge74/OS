@@ -194,16 +194,54 @@ else if (kstrcmp(input, "RUN") == 0) {
 }
 
   else if (kstrcmp(input, "TEST_MALLOC") == 0) {
-        kheap_dump_map();
-        kprintf_unsync("Allocating 100KB...\n");
-        void* p = kmalloc(102400); 
-        kheap_dump_map();
-        kheap_stats();
-        kprintf_unsync("Freeing 100KB...\n");
-        kfree(p);
-        kheap_dump_map();
-        kheap_stats();
+    
+    kprintf_unsync("\n--- STARTING FAT-MIMIC HEAP TEST ---\n");
+    kheap_stats();
+
+    // 1. Allocate two blocks exactly like mkdir does
+    uint8_t* bufA = (uint8_t*)kmalloc(512);
+    uint8_t* bufB = (uint8_t*)kmalloc(512);
+
+    kprintf_unsync("Allocated A at: 0x%x, B at: 0x%x\n", (uint32_t)bufA, (uint32_t)bufB);
+    kheap_stats(); // Should show 2 more blocks used
+
+    // 2. THE SMASH TEST: Fill Buf A with exactly 512 bytes
+    // We use 0xAA so we can see it if it leaks into the header of B
+    kmemset(bufA, 0xAA, 512 / 4); 
+
+    // 3. CHECK INTEGRITY
+    // If kmemset/overflow hit the header of B, B's metadata will be garbage.
+    header_t* headerB = (header_t*)((uint32_t)bufB - sizeof(header_t));
+    
+    if (headerB->size != 512) {
+        kprintf_unsync("!!! BUG DETECTED !!! Header B size corrupted! Expected 512, got %d\n", headerB->size);
     }
+    if (headerB->is_free != 0) {
+        kprintf_unsync("!!! BUG DETECTED !!! Header B marked as FREE while in use!\n");
+    }
+
+    // 4. THE FRAGMENTATION TEST
+    kprintf_unsync("Freeing A and B...\n");
+    kfree(bufA);
+    kfree(bufB);
+    kheap_stats(); // Should return to original state
+
+    // 5. THE "TAIL EATER" TEST
+    // Allocate something small, then something huge.
+    void* small = kmalloc(16);
+    void* big = kmalloc(1024 * 1024); // 1MB
+    
+    if (big == NULL) {
+        kprintf_unsync("!!! BUG DETECTED !!! Small allocation 'ate' the rest of the heap.\n");
+    }
+
+    kfree(small);
+    kfree(big);
+    kprintf_unsync("--- TEST COMPLETE ---\n");
+    kheap_stats();
+}
+
+  
     else if (kstrcmp(input, "HEXDUMP") == 0) {
     if (arg) {
         fat_hexdump_file(arg);
