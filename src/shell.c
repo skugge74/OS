@@ -733,74 +733,47 @@ void shell_print(struct task *t, char *str, uint32_t color) {
 
   int border = WIN_BORDER;
   int padding_x = border + 2;
-  int min_x = t->cursor_x, min_y = t->cursor_y;
-  int max_x = t->cursor_x, max_y = t->cursor_y;
-  int scrolled = 0;
 
   for (int i = 0; str[i] != '\0'; i++) {
+    // 1. Backspace logic
     if (str[i] == '\b') {
       if (t->cursor_x >= padding_x + 8) {
         t->cursor_x -= 8;
-        // Erase the character by drawing a space with the background color
         shell_draw_char(t, ' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222);
-
-        // Ensure the compositor redraws this erased square
-        if (t->cursor_x < min_x)
-          min_x = t->cursor_x;
-        if (t->cursor_y < min_y)
-          min_y = t->cursor_y;
-        if (t->cursor_x + 8 > max_x)
-          max_x = t->cursor_x + 8;
-        if (t->cursor_y + 8 > max_y)
-          max_y = t->cursor_y + 8;
       }
       continue;
     }
+
+    // 2. Newline logic
     if (str[i] == '\n') {
       t->cursor_x = padding_x;
       t->cursor_y += 10;
+    }
+    // 3. Print character logic
+    else {
+      shell_draw_char(t, str[i], t->cursor_x, t->cursor_y, color, 0x222222);
+      t->cursor_x += 8;
 
-      // Check if we hit the bottom border
-      if (t->cursor_y + 10 > t->win_h - border) {
-        shell_scroll(t);
-        scrolled = 1;
+      // Word Wrap
+      if (t->cursor_x >= t->win_w - border - 8) {
+        t->cursor_x = padding_x;
+        t->cursor_y += 10;
       }
-      continue;
     }
 
-    // Pass 't' directly instead of relying on globals!
-    shell_draw_char(t, str[i], t->cursor_x, t->cursor_y, color, 0x222222);
-
-    if (t->cursor_x < min_x)
-      min_x = t->cursor_x;
-    if (t->cursor_y < min_y)
-      min_y = t->cursor_y;
-    if (t->cursor_x + 8 > max_x)
-      max_x = t->cursor_x + 8;
-    if (t->cursor_y + 8 > max_y)
-      max_y = t->cursor_y + 8;
-
-    t->cursor_x += 8;
-
-    // Word Wrap Check
-    if (t->cursor_x >= t->win_w - border - 8) {
-      t->cursor_x = padding_x;
-      t->cursor_y += 10;
-
-      // Check if we hit the bottom border after wrapping
-      if (t->cursor_y + 10 > t->win_h - border) {
-        shell_scroll(t);
-        scrolled = 1;
-      }
+    // 4. Batch Scrolling (Perform all scrolls at once)
+    while (t->cursor_y + 10 > t->win_h - border) {
+      shell_scroll(t);
     }
   }
 
-  if (!scrolled) {
-    extern volatile struct task task_list[MAX_TASKS];
-    int tid = t - task_list;
-    mark_task_dirty(tid, min_x, min_y, max_x - min_x, max_y - min_y);
-  }
+  // 5. Single final update for the whole window
+  // This is the "Professional Snap" - no stuttering
+  extern volatile struct task task_list[MAX_TASKS];
+  int tid = t - task_list;
+  mark_task_dirty(tid, 0, 0, t->win_w, t->win_h);
 }
+
 void shell_draw_char(struct task *t, char c, int x, int y, uint32_t fg,
                      uint32_t bg) {
   if (!t || !t->has_window || !t->window_buffer)
