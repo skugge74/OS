@@ -231,7 +231,7 @@ void shell_task() {
       t->cursor_x = WIN_BORDER + 2;
       t->cursor_y += 10;
       if (t->cursor_y + 10 >= t->win_h)
-        shell_scroll();
+        shell_scroll(t);
     }
 
     if (c == 4) {
@@ -249,7 +249,7 @@ void shell_task() {
       while (idx > 0) {
         idx--;
         t->cursor_x -= 8;
-        shell_draw_char(' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222);
+        shell_draw_char(t, ' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222);
       }
 
       int actual_idx =
@@ -268,13 +268,15 @@ void shell_task() {
           while (idx > 0) {
             idx--;
             t->cursor_x -= 8;
-            shell_draw_char(' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222);
+            shell_draw_char(t, ' ', t->cursor_x, t->cursor_y, 0x222222,
+                            0x222222);
           }
         } else {
           while (idx > 0) {
             idx--;
             t->cursor_x -= 8;
-            shell_draw_char(' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222);
+            shell_draw_char(t, ' ', t->cursor_x, t->cursor_y, 0x222222,
+                            0x222222);
           }
           int actual_idx =
               (history_count == MAX_HISTORY)
@@ -305,7 +307,7 @@ void shell_task() {
     } else if (c == '\b' && idx > 0) {
       idx--;
       t->cursor_x -= 8;
-      shell_draw_char(' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222);
+      shell_draw_char(t, ' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222);
       mark_task_dirty(current_task_idx, t->cursor_x, t->cursor_y, 8, 8);
     } else if (idx < 127 && c >= ' ' && c <= '~') {
       line[idx++] = c;

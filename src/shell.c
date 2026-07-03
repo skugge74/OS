@@ -639,26 +639,33 @@ void execute_command(char *input) {
             "WARNING: Low Heap Memory! Close windows or REBOOT.\n", COLOR_RED);
       }
     }
-
   } else if (kstrcasecmp(input, "CLEAR") == 0) {
-    int sw = task_list[current_task_idx].win_w;
-    int sh = task_list[current_task_idx].win_h;
-    for (int i = 0; i < sw * sh; i++) {
-      task_list[current_task_idx].window_buffer[i] = 0x222222;
-    }
-    task_list[current_task_idx].cursor_x = 2;
-    task_list[current_task_idx].cursor_y = 2;
+    int id = current_task_idx;
+    struct task *t = (struct task *)&task_list[id];
 
+    if (t->has_window && t->window_buffer) {
+      struct multiboot_info *mbi = VESA_get_boot_info();
+      uint32_t sw = mbi->framebuffer_width; // The global stride
+
+      // Safely clear exactly the window's rectangle
+      for (int y = 0; y < t->win_h; y++) {
+        for (int x = 0; x < t->win_w; x++) {
+          t->window_buffer[(y * sw) + x] = 0x222222;
+        }
+      }
+
+      t->cursor_x = 10;
+      t->cursor_y = 10;
+      mark_task_dirty(id, 0, 0, t->win_w, t->win_h);
+    }
   } else if (kstrcasecmp(input, "ECHO") == 0) {
     if (arg) {
       shell_print_current(arg, COLOR_WHITE);
       shell_print_current("\n", COLOR_WHITE);
     }
-
   } else if (kstrcasecmp(input, "SLEEP") == 0) {
     if (arg)
       sleep(katoi(arg));
-
   } else if (kstrcasecmp(input, "KED") == 0) {
     if (arg) {
       char *fn = kmalloc(16);
@@ -671,33 +678,27 @@ void execute_command(char *input) {
     } else {
       shell_print_current("Usage: KED <filename>\n", COLOR_RED);
     }
-
   } else if (kstrcasecmp(input, "TOP") == 0) {
     extern void run_top();
     int tid = spawn_task(run_top, NULL, "TOP");
     task_create_window(tid, 0, 0, 0, 0);
     shell_print_current("TOP Spawned.\n", COLOR_GREEN);
-
   } else if (kstrcmp(input, "GAME") == 0) {
     extern void task_game();
     int tid = spawn_task(task_game, NULL, "GAME");
     task_create_window(tid, 0, 0, 0, 0);
     shell_print_current("Game Spawned.\n", COLOR_GREEN);
-
   } else if (kstrcmp(input, "TIMER") == 0) {
     extern void task_timer();
     spawn_task(task_timer, NULL, "TIMER");
     shell_print_current("Background Timer Spawned.\n", COLOR_GREEN);
-
   } else if (kstrcasecmp(input, "RUN") == 0) {
     cmd_run(arg);
-
   } else if (kstrcasecmp(input, "COMPILE") == 0) {
     if (arg)
       shell_compile(arg);
     else
       shell_print_current("Usage: COMPILE <file.txt>\n", COLOR_RED);
-
   } else if (kstrcasecmp(input, "KILL") == 0) {
     if (arg) {
       int id = katoi(arg);
@@ -708,7 +709,6 @@ void execute_command(char *input) {
         shell_print_current("Task killed.\n", COLOR_GREEN);
       }
     }
-
   } else if (input[0] != '\0') {
     shell_print_current("Unknown command: ", COLOR_RED);
     shell_print_current(input, COLOR_RED);
@@ -731,25 +731,45 @@ void shell_print(struct task *t, char *str, uint32_t color) {
   if (!t || !t->window_buffer)
     return;
 
-  int padding_x = WIN_BORDER + 2;
+  int border = WIN_BORDER;
+  int padding_x = border + 2;
   int min_x = t->cursor_x, min_y = t->cursor_y;
   int max_x = t->cursor_x, max_y = t->cursor_y;
   int scrolled = 0;
 
   for (int i = 0; str[i] != '\0'; i++) {
+    if (str[i] == '\b') {
+      if (t->cursor_x >= padding_x + 8) {
+        t->cursor_x -= 8;
+        // Erase the character by drawing a space with the background color
+        shell_draw_char(t, ' ', t->cursor_x, t->cursor_y, 0x222222, 0x222222);
 
+        // Ensure the compositor redraws this erased square
+        if (t->cursor_x < min_x)
+          min_x = t->cursor_x;
+        if (t->cursor_y < min_y)
+          min_y = t->cursor_y;
+        if (t->cursor_x + 8 > max_x)
+          max_x = t->cursor_x + 8;
+        if (t->cursor_y + 8 > max_y)
+          max_y = t->cursor_y + 8;
+      }
+      continue;
+    }
     if (str[i] == '\n') {
       t->cursor_x = padding_x;
       t->cursor_y += 10;
 
-      if (t->cursor_y + 10 >= t->win_h) {
-        shell_scroll(t); // shell_scroll() already marks the whole window dirty
+      // Check if we hit the bottom border
+      if (t->cursor_y + 10 > t->win_h - border) {
+        shell_scroll(t);
         scrolled = 1;
       }
       continue;
     }
 
-    shell_draw_char(str[i], t->cursor_x, t->cursor_y, color, 0x222222);
+    // Pass 't' directly instead of relying on globals!
+    shell_draw_char(t, str[i], t->cursor_x, t->cursor_y, color, 0x222222);
 
     if (t->cursor_x < min_x)
       min_x = t->cursor_x;
@@ -762,11 +782,13 @@ void shell_print(struct task *t, char *str, uint32_t color) {
 
     t->cursor_x += 8;
 
-    if (t->cursor_x >= t->win_w - 8) {
+    // Word Wrap Check
+    if (t->cursor_x >= t->win_w - border - 8) {
       t->cursor_x = padding_x;
       t->cursor_y += 10;
 
-      if (t->cursor_y + 10 >= t->win_h) {
+      // Check if we hit the bottom border after wrapping
+      if (t->cursor_y + 10 > t->win_h - border) {
         shell_scroll(t);
         scrolled = 1;
       }
@@ -774,28 +796,28 @@ void shell_print(struct task *t, char *str, uint32_t color) {
   }
 
   if (!scrolled) {
-    mark_task_dirty(get_current_task_id(), min_x, min_y, max_x - min_x,
-                    max_y - min_y);
+    extern volatile struct task task_list[MAX_TASKS];
+    int tid = t - task_list;
+    mark_task_dirty(tid, min_x, min_y, max_x - min_x, max_y - min_y);
   }
-  // if scrolled, shell_scroll() already issued the (unavoidable) full-window
-  // dirty mark — no need to also mark the tiny glyph region on top of it.
 }
-void shell_draw_char(char c, int x, int y, uint32_t fg, uint32_t bg) {
-  if (shell_tid < 0)
+void shell_draw_char(struct task *t, char c, int x, int y, uint32_t fg,
+                     uint32_t bg) {
+  if (!t || !t->has_window || !t->window_buffer)
     return;
-  volatile struct task *t = &task_list[shell_tid];
+
   struct multiboot_info *mbi = VESA_get_boot_info();
   uint32_t sw = mbi->framebuffer_width;
 
-  if (!t->has_window || !t->window_buffer)
-    return;
-
   extern uint8_t font8x8_basic[128][8];
   uint8_t *glyph = font8x8_basic[(unsigned char)c];
+
   for (int row = 0; row < 8; row++) {
     for (int col = 0; col < 8; col++) {
       int dx = x + col;
       int dy = y + row;
+
+      // Ensure we never draw outside the window bounds
       if (dx >= 0 && dx < t->win_w && dy >= 0 && dy < t->win_h) {
         if (glyph[row] & (1 << (7 - col)))
           t->window_buffer[(dy * sw) + dx] = fg;
@@ -813,28 +835,29 @@ void shell_scroll(struct task *t) {
   struct multiboot_info *mbi = VESA_get_boot_info();
   uint32_t sw = mbi->framebuffer_width;
   int scroll_y = 10;
+  int border = WIN_BORDER;
 
-  for (int y = 0; y < t->win_h - scroll_y; y++) {
-    uint32_t *dst = &t->window_buffer[y * sw];
-    uint32_t *src = &t->window_buffer[(y + scroll_y) * sw];
-
-    __asm__ volatile("rep movsl"
-                     : "+D"(dst), "+S"(src), "+c"(t->win_w)
-                     :
-                     : "memory");
+  // Move everything up (strictly inside the borders!)
+  for (int y = border; y < t->win_h - border - scroll_y; y++) {
+    for (int x = border; x < t->win_w - border; x++) {
+      t->window_buffer[(y * sw) + x] =
+          t->window_buffer[((y + scroll_y) * sw) + x];
+    }
   }
 
-  for (int y = t->win_h - scroll_y; y < t->win_h; y++) {
-    uint32_t *dst = &t->window_buffer[y * sw];
-    uint32_t val = 0x222222;
-
-    __asm__ volatile("rep stosl"
-                     : "+D"(dst), "+c"(t->win_w)
-                     : "a"(val)
-                     : "memory");
+  // Clear the newly exposed space at the bottom (strictly inside the borders!)
+  for (int y = t->win_h - border - scroll_y; y < t->win_h - border; y++) {
+    for (int x = border; x < t->win_w - border; x++) {
+      t->window_buffer[(y * sw) + x] = 0x222222;
+    }
   }
 
   t->cursor_y -= scroll_y;
 
-  mark_task_dirty(get_current_task_id(), 0, 0, t->win_w, t->win_h);
+  extern volatile struct task task_list[MAX_TASKS];
+  int tid = t - task_list;
+
+  // Only mark the interior of the window as dirty
+  mark_task_dirty(tid, border, border, t->win_w - (border * 2),
+                  t->win_h - (border * 2));
 }

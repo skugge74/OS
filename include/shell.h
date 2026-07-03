@@ -10,8 +10,9 @@ void run_top();
 void shell_compile(const char *filename);
 void update_shell_cwd(char *target);
 
-void shell_scroll();
+void shell_scroll(struct task *t);
 void shell_print_current(char *str, uint32_t color);
 void shell_print(struct task *t, char *str, uint32_t color);
-void shell_draw_char(char c, int x, int y, uint32_t fg, uint32_t bg);
+void shell_draw_char(struct task *t, char c, int x, int y, uint32_t fg,
+                     uint32_t bg);
 #endif
