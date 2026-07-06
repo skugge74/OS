@@ -470,6 +470,7 @@ void shell_compile(const char *arg) {
 // execute_command — dispatcher. Filesystem branches call cmd_* only.
 // ---------------------------------------------------------------------------
 void execute_command(char *input) {
+  shell_tid = current_task_idx;
   char *arg = find_space(input);
   if (arg) {
     *arg = '\0';

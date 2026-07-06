@@ -1,4 +1,5 @@
 #include "assembler.h"
+#include "header.h"
 #include "idt.h"
 #include "kheap.h"
 #include "lib.h"
@@ -479,6 +480,17 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
       out_buf[*pos + 1] = 0x80;
     }
     *pos += 2;
+    // --- NEW: HEADLESS DIRECTIVE ---
+  } else if (kstrcmp(cmd, "HEADLESS") == 0) {
+    if (out_buf) {
+      // out_buf points to the absolute start of our binary file.
+      // The header is at the very beginning, so we cast it and modify the
+      // flags.
+      kdx_header_t *hdr = (kdx_header_t *)out_buf;
+      hdr->flags &= ~1; // Turn off the GUI flag (Bit 0)
+    }
+    // Note: We don't advance *pos because this doesn't generate any CPU
+    // opcodes.
   } else if (kstrcmp(cmd, "CLEAR") == 0 || kstrcmp(cmd, "EXIT") == 0) {
     emit_load(0xB8, (kstrcmp(cmd, "CLEAR") == 0) ? "5" : "4", out_buf, pos);
     if (out_buf) {

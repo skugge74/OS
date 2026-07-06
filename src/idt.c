@@ -9,6 +9,7 @@
 #include "wm.h"
 #include <stdint.h>
 
+extern volatile int shell_tid;
 uint32_t timer_frequency = 0;
 extern volatile struct task task_list[MAX_TASKS];
 extern volatile int current_task_idx;
@@ -495,8 +496,10 @@ uint32_t syscall_handler(struct registers *regs) {
     }
     // HEADLESS FALLBACK (STDOUT)
     else {
-      extern void shell_print(char *str, uint32_t color);
-      shell_print(str, color);
+      if (shell_tid != -1) {
+        extern void shell_print(struct task * t, char *str, uint32_t color);
+        shell_print((struct task *)&task_list[shell_tid], str, color);
+      }
     }
   } else if (regs->eax == 8) { // CREATE_WINDOW
     task_list[id].has_window = 1;
@@ -550,8 +553,10 @@ uint32_t syscall_handler(struct registers *regs) {
     }
     // HEADLESS FALLBACK (STDOUT)
     else {
-      extern void shell_print(char *str, uint32_t color);
-      shell_print(buf, color);
+      if (shell_tid != -1) {
+        extern void shell_print(struct task * t, char *str, uint32_t color);
+        shell_print((struct task *)&task_list[shell_tid], buf, color);
+      }
     }
   }
   // --- THE SYSCALL 10 FIX ---
@@ -618,10 +623,11 @@ uint32_t syscall_handler(struct registers *regs) {
     }
     // HEADLESS FALLBACK (STDOUT)
     else {
-      // Convert the single char into a null-terminated string for shell_print
-      char temp_str[2] = {c, '\0'};
-      extern void shell_print(char *str, uint32_t color);
-      shell_print(temp_str, color);
+      if (shell_tid != -1) {
+        char temp_str[2] = {c, '\0'};
+        extern void shell_print(struct task * t, char *str, uint32_t color);
+        shell_print((struct task *)&task_list[shell_tid], temp_str, color);
+      }
     }
   } else if (regs->eax == 14) { // GET_ARGC
     // Calculate the task's base memory exactly like Syscall 7 does
