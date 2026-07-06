@@ -2,6 +2,7 @@
 #include "idt.h"
 #include "kheap.h"
 #include "lib.h"
+#include "vfs.h"
 
 Label label_table[128];
 int label_count = 0;
@@ -43,6 +44,66 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
   const char *ptr = get_token(clean_line, cmd);
   if (!ptr || cmd[0] == '\0')
     return;
+
+  // --- NEW: THE .INCLUDE DIRECTIVE ---
+  if (kstrcmp(cmd, "INCLUDE") == 0) {
+    const char *p = ptr;
+    while (*p == ' ' || *p == '\t')
+      p++;
+
+    char filename[64];
+    int f_len = 0;
+
+    // Handle quoted filenames
+    if (*p == '\"') {
+      p++;
+      while (*p != '\"' && *p != '\0' && f_len < 63) {
+        filename[f_len++] = *p++;
+      }
+    } else {
+      // Fallback for unquoted filenames
+      while (*p != ' ' && *p != '\0' && f_len < 63) {
+        filename[f_len++] = *p++;
+      }
+    }
+    filename[f_len] = '\0';
+
+    // 1. Walk the path to find the file
+    vfs_node_t *file_node = vfs_walk_path(filename, NULL);
+    if (!file_node) {
+      kprintf_unsync("ASM ERROR: INCLUDE file '%s' not found!\n", filename);
+      return;
+    }
+
+    // 2. Allocate buffer and read
+    uint32_t file_size = file_node->size;
+    uint8_t *file_buf = (uint8_t *)kmalloc(file_size + 1);
+
+    if (file_buf) {
+      vfs_read(file_node, 0, file_size, file_buf);
+      file_buf[file_size] = '\0';
+
+      // 3. Parse included file line-by-line and recursively assemble
+      char line_buf[128];
+      int line_idx = 0;
+      for (uint32_t i = 0; i <= file_size; i++) {
+        if (file_buf[i] == '\n' || file_buf[i] == '\0') {
+          line_buf[line_idx] = '\0';
+          if (line_idx > 0) {
+            assemble_line(line_buf, out_buf, pos, pass);
+          }
+          line_idx = 0;
+        } else if (file_buf[i] != '\r') {
+          if (line_idx < 127) {
+            line_buf[line_idx++] = file_buf[i];
+          }
+        }
+      }
+      kfree(file_buf);
+    }
+    kfree(file_node);
+    return;
+  }
 
   if (kstrcmp(cmd, "LABEL") == 0) {
     if (pass == 1) {
@@ -171,13 +232,13 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
         out_buf[*pos + 1] = 0x15;
         kmemcpy(&out_buf[*pos + 2], &offset, 4);
       }
-      *pos += 6; // FIX: Advance by 6 unconditionally!
+      *pos += 6;
     } else {
       if (out_buf) {
         out_buf[*pos] = 0xA3;
         kmemcpy(&out_buf[*pos + 1], &offset, 4);
       }
-      *pos += 5; // FIX: Advance by 5 unconditionally!
+      *pos += 5;
     }
   } else if (kstrcmp(cmd, "PRINT") == 0) {
     const char *p = ptr;
@@ -189,8 +250,8 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
       uint32_t s_len = 0;
       while (*p != '\"' && *p != '\0') {
         if (*p == '\\' && *(p + 1) == 'n') {
-          str_val[s_len++] = '\n'; // Insert the real ASCII 10 byte!
-          p += 2;                  // Skip over the '\' and 'n' in the text
+          str_val[s_len++] = '\n';
+          p += 2;
         } else {
           str_val[s_len++] = *p++;
         }
@@ -253,7 +314,6 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
       *pos += 6;
 
       // 3. Load X (ECX) and Y (EDX)
-      // If it's a number, use B9/BA. If it's a variable, use 8B 0D/15.
       char *coords[] = {t1, t2};
       uint8_t opcodes[] = {0xB9, 0xBA}; // MOV ECX, imm / MOV EDX, imm
       uint8_t mem_ops[] = {0x0D, 0x15}; // MOV ECX, [mem] / MOV EDX, [mem]
@@ -326,10 +386,8 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
       }
       *pos += 6;
     }
-  }
-  // FIX: ADDED 'N' FOR JNE (Jump Not Equal)
-  else if (cmd[0] == 'J' &&
-           (cmd[1] == 'E' || cmd[1] == 'L' || cmd[1] == 'G' || cmd[1] == 'N')) {
+  } else if (cmd[0] == 'J' && (cmd[1] == 'E' || cmd[1] == 'L' ||
+                               cmd[1] == 'G' || cmd[1] == 'N')) {
     char lbl[32];
     get_token(ptr, lbl);
     uint8_t cond = 0;
@@ -364,9 +422,7 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
     if (out_buf)
       kmemcpy(&out_buf[*pos], &off, 4);
     *pos += 4;
-  }
-  // --- NEW: SUBROUTINES (CALL / RET) ---
-  else if (kstrcmp(cmd, "CALL") == 0) {
+  } else if (kstrcmp(cmd, "CALL") == 0) {
     char name[32];
     get_token(ptr, name);
     uint32_t target = 0;
@@ -393,9 +449,7 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
     if (out_buf)
       out_buf[*pos] = 0xC3; // C3 is x86 RET
     (*pos)++;
-  }
-  // --- NEW: KEYBOARD INPUT (GETKEY) ---
-  else if (kstrcmp(cmd, "GETKEY") == 0) {
+  } else if (kstrcmp(cmd, "GETKEY") == 0) {
     char var_name[32];
     get_token(ptr, var_name);
     uint32_t offset = get_var_offset(var_name);
@@ -466,9 +520,7 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
       out_buf[*pos + 1] = 0x80;
     }
     *pos += 2;
-  }
-  // --- NEW: LOADFILE "filename.ext" ptr_var size_var ---
-  else if (kstrcmp(cmd, "LOADFILE") == 0) {
+  } else if (kstrcmp(cmd, "LOADFILE") == 0) {
     const char *p = ptr;
     while (*p == ' ' || *p == '\t')
       p++;
@@ -531,10 +583,7 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
       }
       *pos += 4;
     }
-  }
-  // --- NEW: READBYTE ptr_var index_var out_var ---
-  // Reads a single byte from (ptr_var + index_var) into out_var
-  else if (kstrcmp(cmd, "READBYTE") == 0) {
+  } else if (kstrcmp(cmd, "READBYTE") == 0) {
     char v_ptr[32], v_idx[32], v_out[32];
     ptr = get_token(ptr, v_ptr);
     ptr = get_token(ptr, v_idx);
@@ -581,9 +630,7 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
       kmemcpy(&out_buf[*pos + 2], &off_out, 4);
     }
     *pos += 6;
-  }
-  // --- NEW: FREE ptr_var ---
-  else if (kstrcmp(cmd, "FREE") == 0) {
+  } else if (kstrcmp(cmd, "FREE") == 0) {
     char v_ptr[32];
     get_token(ptr, v_ptr);
     uint32_t off_ptr = get_var_offset(v_ptr);
@@ -610,7 +657,6 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
     }
     *pos += 2;
   } else if (kstrcmp(cmd, "PRINT_CHAR") == 0) {
-    // PRINT_CHAR char_var x_var y_var color
     char v_c[32], v_x[32], v_y[32], v_col[32];
     ptr = get_token(ptr, v_c);
     ptr = get_token(ptr, v_x);
@@ -815,10 +861,7 @@ void assemble_line(const char *line, uint8_t *out_buf, uint32_t *pos,
       out_buf[*pos + 1] = 0x80; // int 0x80
     }
     *pos += 2;
-  }
-  // --- NEW: LOADFILE_ARG ptr_var size_var ---
-  // Loads the file specified by the command-line argument string
-  else if (kstrcmp(cmd, "LOADFILE_ARG") == 0) {
+  } else if (kstrcmp(cmd, "LOADFILE_ARG") == 0) {
     char var_ptr[32], var_size[32];
     ptr = get_token(ptr, var_ptr);
     ptr = get_token(ptr, var_size);
