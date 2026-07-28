@@ -1,52 +1,49 @@
 # KDXOS
 
-> A 32-bit graphical, multitasking operating system built entirely from scratch.
+KDXOS is a 32-bit graphical, multitasking operating system built from scratch in C and Assembly. Developed as a hobbyist architecture project, it features a dynamic kernel heap, a FAT-compatible file system, a tiling window manager, and a custom Turing-complete programming language. Instead of relying on standard C executables, KDXOS includes an on-device compiler that translates native scripts directly into x86 machine code binaries within the operating system.
 
-KDXOS is a custom-built, hobbyist operating system featuring a dynamic kernel heap, a FAT-compatible file system, a tiling window manager, and its own Turing-complete programming language and on-device compiler. It completely bypasses standard C executables in favor of native, script-to-binary compilation directly within the OS itself.
+## Core Features
 
-## 🌟 Core Features
+### Kernel & Architecture
 
-### 🧠 Kernel & Memory Management
+* **Boot Process:** Multiboot compliant, booting via GRUB into a 32-bit protected mode environment.
+* **Memory Management:** Full virtual memory mapping and isolation via a Physical Memory Manager (PMM) and custom paging structure.
+* **Dynamic Kernel Heap:** Custom `kmalloc` and `kfree` implementation managing a 64MB pool, complete with automatic block coalescing and internal fragmentation mitigation.
+* **Preemptive Multitasking:** Hardware timer-driven context switching, round-robin task scheduling, and isolated 16KB stacks per process.
 
-* **Custom Bootloader/Multiboot:** Boots via GRUB into a 32-bit protected mode environment.
-* **Physical Memory Manager (PMM) & Paging:** Full virtual memory mapping and isolation.
-* **Dynamic Kernel Heap (`kheap`):** Custom `kmalloc` and `kfree` implementation with automatic block coalescing, internal fragmentation management, and a massive 64MB memory pool.
-* **Preemptive Multitasking:** Context switching via hardware timer interrupts, task scheduling, and isolated 16KB stacks per process.
+### Graphics & Window Management
 
-### 🖥️ Graphics & GUI
+* **VESA Driver:** Double-buffered rendering supporting high-resolution output (e.g., 1024x768).
+* **Tiling Compositor:** A dedicated background task handling dynamic screen tiling, window redrawing, and active-focus tracking for spawned GUI tasks.
+* **Render Optimization:** Implements smart dirty rectangles to redraw only updated screen regions, minimizing computational overhead.
 
-* **VESA Graphics Interface:** Double-buffered high-resolution rendering (e.g., 1024x768).
-* **Tiling Window Manager:** A dedicated compositor task that handles dynamic screen tiling, window redrawing, and active-focus borders based on spawned GUI tasks.
-* **Smart Dirty Rectangles:** Only redraws updated portions of the screen to maintain high performance.
+### Storage & File System
 
-### 💾 File System (FAT Hybrid)
+* **Hardware Drivers:** Custom PIO-mode ATA disk driver for IDE hard drives.
+* **FAT-Hybrid Implementation:** Native support for file and directory operations (create, read, write, append, delete).
+* **Path Management:** Full support for subdirectories, relative pathing (`.` and `..`), and absolute path parsing.
+* **Dynamic Allocation:** Automatically expands files across the disk by allocating free clusters and updating the File Allocation Table.
 
-* **IDE Hard Drive Driver:** Custom PIO-mode ATA disk reader/writer.
-* **Native File Management:** Full support for creating, reading, writing, appending, and deleting files.
-* **Directory Management:** Supports subdirectories, relative paths (`.` and `..`), and absolute path parsing.
-* **Dynamic Cluster Allocation:** Automatically grows files across the disk by allocating free clusters and linking them in the File Allocation Table.
+### Userland & Shell
 
-### 🐚 The KDXOS Shell
+The operating system boots into an interactive, graphical command-line interface with a suite of built-in commands:
 
-An interactive, graphical command-line interface with a rich set of built-in commands:
+* **File I/O:** `ls`, `cd`, `cat`, `mkdir`, `rm`, `rmdir`, `pwd`, `touch`, `write`, `hexdump`
+* **Process Control:** `ps`, `kill`, `top`, `run`
+* **System Diagnostics:** `stat` (live kernel heap analysis), `uptime`, `clear`, `echo`
+* **Included Applications:** `ked` (Native Text Editor), `game`, `timer`
 
-* **File I/O:** `LS`, `CD`, `CAT`, `MKDIR`, `RM`, `RMDIR`, `PWD`, `TOUCH`, `WRITE`, `HEXDUMP`
-* **Process Management:** `PS`, `KILL`, `TOP`, `RUN`
-* **System Diagnostics:** `STAT` (live heap analysis), `UPTIME`, `CLEAR`, `ECHO`
-* **Native Apps:** `KED` (Text Editor), `GAME`, `TIMER`
+### Native Toolchain & Scripting
 
-### ⚙️ Native Programming Language
+KDXOS features a built-in assembler/compiler that allows users to write programs in the custom KDXOS Scripting Language and compile them directly on the device.
 
-KDXOS features a built-in assembler/compiler. Users can write text files using the custom KDXOS Scripting Language and compile them directly into native x86 machine code binaries on the device.
+* **Control Flow:** Turing-complete support for `GOTO`, `CALL`, `RET`, and conditional jumps (`CMP`, `JE`, `JL`, `JG`, `JNE`).
+* **Logic & Variables:** Dynamic runtime variable allocation (`SET`) and arithmetic (`ADD`, `SUB`).
+* **I/O & Graphics:** Non-blocking hardware keyboard hooks (`GETKEY`) and direct compositor API calls (`WINDOW`, `RECT`, `PRINT`).
 
-* **Turing-Complete:** Supports `GOTO`, `CALL`, `RET`, and conditional jumps (`CMP`, `JE`, `JL`, `JG`, `JNE`).
-* **Variables & Math:** Dynamic runtime variables (`SET`), `ADD`, `SUB`.
-* **Interactive Input:** Non-blocking hardware keyboard hooks (`GETKEY`).
-* **Graphics API:** Direct calls to OS compositor (`WINDOW`, `RECT`, `PRINT`).
+## Code Example
 
-## 📝 Code Example (KDXOS Language)
-
-Here is a native KDXOS application that renders a menu and waits for keyboard input:
+A standard KDXOS application rendering an interactive menu and listening for hardware interrupts:
 
 ```as
 WINDOW 0 0 400 300
@@ -79,7 +76,7 @@ LABEL draw_menu
 
 ```
 
-## 🛠️ Building & Running
+## Building & Running
 
 ### Prerequisites
 
@@ -98,54 +95,57 @@ make
 
 ```
 
-### Running in Emulator
+### Emulation
 
-To launch KDXOS inside QEMU with an attached IDE hard drive:
+To launch KDXOS inside QEMU with an attached IDE hard drive image:
 
 ```bash
 make run
 
 ```
 
-## 📂 Project Structure
-```
+## Project Structure
+
+```text
 OS_Root/
-├── assets/             # Media, fonts, or external assets (e.g., BG.BMP)
-├── bin/                # Compiled userland binaries (e.g., SPIN2.BIN)
-├── build/              # Object files (.o) generated during compilation
-├── disk.img            # The compiled hard drive image (FAT filesystem)
-├── file/               # Raw files to be injected into the disk image
-├── include/            # C header files (.h) for the kernel and drivers
-├── tests/              # Test scripts or testing framework files
-├── linker.ld           # Linker script mapping out kernel memory sections
-├── Makefile            # Build system instructions
-├── sys_specs.csv       # Language and Syscall specifications documentation
+├── assets/             # External media and bitmap fonts
+├── bin/                # Compiled userland binaries (.BIN)
+├── build/              # Generated object files (.o)
+├── disk.img            # The compiled FAT filesystem hard drive image
+├── file/               # Raw files injected into the disk image on build
+├── include/            # C headers (.h) for kernel and drivers
+├── tests/              # Testing framework and scripts
+├── linker.ld           # Linker script for kernel memory mapping
+├── Makefile            # Build system rules
+├── sys_specs.csv       # Language and Syscall documentation
 └── src/                # Kernel and Driver Source Code
-    ├── assembler.c     # Native KDXOS Scripting Language compiler
-    ├── bmp.c           # BMP image parsing and rendering
-    ├── boot.s          # Assembly bootloader / Multiboot entry point
-    ├── fat.c           # FAT16/32 File System and ATA PIO driver
-    ├── font.c          # Bitmap font rendering logic
-    ├── gdt.c           # Global Descriptor Table setup in C
+    ├── assembler.c     # Native KDXOS compiler
+    ├── bmp.c           # BMP parsing and rendering
+    ├── boot.s          # Multiboot entry point
+    ├── fat.c           # FAT File System and ATA PIO driver
+    ├── font.c          # Bitmap font rendering
+    ├── gdt.c           # Global Descriptor Table setup
     ├── gdt_flush.s     # GDT assembly loader
-    ├── idt.c           # Interrupt Descriptor Table & Exception handlers
-    ├── interrupts.s    # Assembly wrappers for ISRs and IRQs
-    ├── io.c            # Low-level port I/O (inb, outb)
-    ├── KED.c           # KDXOS Native Text Editor application
-    ├── kernel.c        # Main kernel entry point and initialization
-    ├── kheap.c         # Dynamic Memory Manager (kmalloc / kfree)
-    ├── lib.c           # Standard library utilities (kmemset, kstrcmp, etc.)
+    ├── idt.c           # Interrupt Descriptor Table & Exceptions
+    ├── interrupts.s    # ISR and IRQ assembly wrappers
+    ├── io.c            # Low-level port I/O
+    ├── KED.c           # Native text editor application
+    ├── kernel.c        # Main kernel entry point
+    ├── kheap.c         # Dynamic Memory Manager
+    ├── lib.c           # Standard library utilities
     ├── paging.c        # Virtual memory management
-    ├── paging_asm.s    # Assembly routines for enabling paging
-    ├── pmm.c           # Physical Memory Manager (bitmap based)
-    ├── shell.c         # Graphical command-line interface & commands
+    ├── paging_asm.s    # Paging assembly routines
+    ├── pmm.c           # Physical Memory Manager
+    ├── shell.c         # Graphical CLI environment
     ├── task.c          # Preemptive multitasking scheduler
-    └── vesa.c          # VESA Graphics driver and double-buffering
+    └── vesa.c          # VESA Graphics driver
+
 ```
-## 🚀 Future Roadmap
+
+## Roadmap
 
 * [ ] Virtual File System (VFS) abstraction layer.
-* [ ] Extended standard library for the custom scripting language.
+* [ ] Extended standard library for the native scripting language.
 
 ---
 
